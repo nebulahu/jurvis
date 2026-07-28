@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jarvis-assistant"
+version = "0.5.0"
+description = "一个安全、可扩展、带 Obsidian 长期记忆的个人 AI 助手"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "openai>=2.0,<3",
+  "python-dotenv>=1.0,<2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10"]
+voice = [
+  "sounddevice>=0.5,<1",
+  "pyttsx3>=2.90,<3",
+]
+wake = [
+  "openwakeword>=0.6,<1",
+  "webrtcvad-wheels>=2.0.14,<3",
+]
+desktop = ["comtypes>=1.4,<2"]
+
+[project.scripts]
+jarvis = "jarvis.interfaces.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
