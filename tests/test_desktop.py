@@ -1,6 +1,7 @@
 import json
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +14,7 @@ from jarvis.ports.desktop import (
     ActionResult,
     ActionStatus,
     DesktopAction,
+    DesktopScreenshot,
     DesktopSnapshot,
     ElementRef,
     WindowRef,
@@ -108,6 +110,7 @@ def test_desktop_tools_use_read_and_confirmation_risk_levels() -> None:
 class FakeDesktopObserver:
     def __init__(self) -> None:
         self.actions: list[DesktopAction] = []
+        self.cancelled = False
         self.window = WindowRef(
             window_id="window-1",
             application="记事本",
@@ -140,6 +143,13 @@ class FakeDesktopObserver:
                     name="",
                     is_sensitive=True,
                 ),
+                ElementRef(
+                    element_id="element-4",
+                    snapshot_id="snapshot-1",
+                    role="Document",
+                    name="正文",
+                    patterns=("Scroll",),
+                ),
             ),
         )
 
@@ -153,6 +163,27 @@ class FakeDesktopObserver:
         if window_id != self.window.window_id:
             raise KeyError("unknown window")
         return self.snapshot
+
+    def capture_window_screenshot(self, window_id: str) -> DesktopScreenshot:
+        if window_id != self.window.window_id:
+            raise KeyError("unknown window")
+        return DesktopScreenshot(
+            screenshot_id="screenshot-1",
+            window=self.window,
+            created_at=datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc),
+            expires_at=datetime(2026, 7, 27, 12, 1, tzinfo=timezone.utc),
+            path=Path("screenshot-1.bmp"),
+            width=640,
+            height=480,
+        )
+
+    def cleanup_screenshots(self) -> int:
+        return 0
+
+    def get_screenshot(self, screenshot_id: str) -> DesktopScreenshot:
+        if screenshot_id != "screenshot-1":
+            raise KeyError("unknown screenshot")
+        return self.capture_window_screenshot(self.window.window_id)
 
     def get_window_ref(self, window_id: str) -> WindowRef:
         if window_id != self.window.window_id:
@@ -174,6 +205,12 @@ class FakeDesktopObserver:
     def execute_action(self, action: DesktopAction) -> ActionResult:
         self.actions.append(action)
         return ActionResult(status=ActionStatus.SUCCESS)
+
+    def request_cancel(self) -> None:
+        self.cancelled = True
+
+    def clear_cancel(self) -> None:
+        self.cancelled = False
 
 
 def test_desktop_observation_tools_are_l1_and_return_structured_models() -> None:
@@ -200,6 +237,14 @@ def test_desktop_observation_tools_are_l1_and_return_structured_models() -> None
     assert snapshot["snapshot_id"] == "snapshot-1"
     assert snapshot["elements"][0]["role"] == "Button"
     assert "handle" not in json.dumps(snapshot)
+    assert registry.get("capture_window_screenshot").risk is RiskLevel.L1
+    screenshot = json.loads(
+        registry.execute("capture_window_screenshot", {"window_id": "window-1"})
+    )
+    assert screenshot["screenshot_id"] == "screenshot-1"
+    assert screenshot["external_transmission"] is False
+    assert screenshot["width"] == 640
+    assert "handle" not in json.dumps(screenshot)
 
 
 def test_desktop_action_tools_use_runtime_target_risk_and_safe_preview() -> None:
@@ -229,9 +274,28 @@ def test_desktop_action_tools_use_runtime_target_risk_and_safe_preview() -> None
     result = json.loads(registry.execute("invoke_element", arguments))
     assert result["status"] == "success"
     assert controller.actions[0].kind.value == "invoke"
-    assert not any(
-        schema["name"] == "click_coordinate" for schema in registry.schemas()
-    )
+    click = registry.get("click_coordinate")
+    click_args = {
+        "window_id": "window-1",
+        "screenshot_id": "screenshot-1",
+        "x": 12,
+        "y": 34,
+        "purpose": "普通点击",
+    }
+    assert click.resolve_risk(click_args) is RiskLevel.L2
+    assert click.preview_arguments(click_args)["control_name"] == "普通点击"
+    click_result = json.loads(registry.execute("click_coordinate", click_args))
+    assert click_result["status"] == "success"
+    assert controller.actions[-1].kind.value == "click_coordinate"
+    assert controller.actions[-1].payload == {
+        "screenshot_id": "screenshot-1",
+        "x": 12,
+        "y": 34,
+        "purpose": "普通点击",
+    }
+    assert click.resolve_risk(
+        {**click_args, "purpose": "删除记录"}
+    ) is RiskLevel.L3
 
 
 def test_set_value_tool_summarizes_text_and_blocks_sensitive_targets() -> None:
@@ -268,6 +332,60 @@ def test_set_value_tool_summarizes_text_and_blocks_sensitive_targets() -> None:
     result = json.loads(registry.execute("set_element_value", normal))
     assert result["status"] == "success"
     assert controller.actions[-1].payload == {"text": normal["text"]}
+
+
+def test_shortcut_and_scroll_tools_use_allowlists_and_safe_payloads() -> None:
+    launcher = WindowsApplicationLauncher(
+        ["记事本"],
+        start_app_loader=lambda: [],
+        process_starter=lambda arguments: None,
+    )
+    controller = FakeDesktopObserver()
+    registry = ToolRegistry()
+    register_desktop_tools(registry, launcher, controller, controller)
+
+    shortcut = registry.get("send_shortcut")
+    scroll = registry.get("scroll_element")
+    shortcut_args = {"window_id": "window-1", "shortcut": "copy"}
+    scroll_args = {
+        "window_id": "window-1",
+        "snapshot_id": "snapshot-1",
+        "element_id": "element-4",
+        "direction": "down",
+        "amount": "small",
+    }
+
+    assert shortcut.resolve_risk(shortcut_args) is RiskLevel.L2
+    assert shortcut.preview_arguments(shortcut_args)["keys"] == ["copy"]
+    assert scroll.resolve_risk(scroll_args) is RiskLevel.L2
+    assert scroll.preview_arguments(scroll_args)["control_name"] == "正文"
+
+    shortcut_result = json.loads(registry.execute("send_shortcut", shortcut_args))
+    scroll_result = json.loads(registry.execute("scroll_element", scroll_args))
+
+    assert shortcut_result["status"] == "success"
+    assert scroll_result["status"] == "success"
+    assert controller.actions[-2].payload == {"shortcut": "copy"}
+    assert controller.actions[-1].payload == {
+        "direction": "down",
+        "amount": "small",
+    }
+
+
+def test_desktop_tools_register_cancellation_callbacks() -> None:
+    launcher = WindowsApplicationLauncher(
+        ["记事本"],
+        start_app_loader=lambda: [],
+        process_starter=lambda arguments: None,
+    )
+    controller = FakeDesktopObserver()
+    registry = ToolRegistry()
+    register_desktop_tools(registry, launcher, controller, controller)
+
+    registry.request_cancellation()
+    assert controller.cancelled
+    registry.clear_cancellation()
+    assert not controller.cancelled
 
 
 def _window(

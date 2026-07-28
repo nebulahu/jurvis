@@ -6,7 +6,7 @@ from jarvis.provider import (
     OpenAICompatibleResponsesProvider,
     ProviderRequestError,
 )
-from jarvis.application.models import ChatMessage, ToolCall, ToolResult
+from jarvis.application.models import ChatMessage, ImageContent, TextContent, ToolCall, ToolResult
 
 
 class FakeCompletions:
@@ -68,6 +68,110 @@ def test_chat_provider_translates_tools_and_tool_history() -> None:
     assert messages[-1] == {"role": "tool", "tool_call_id": "call_42", "content": "12:00"}
 
 
+def test_chat_provider_blocks_image_input_by_default_before_network(
+    tmp_path,
+) -> None:
+    image_path = tmp_path / "window.bmp"
+    image_path.write_bytes(b"BMfake")
+    completions = FakeCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAICompatibleChatProvider("key", "local-model", client=client)
+
+    try:
+        provider.respond(
+            instructions="test",
+            input_items=[
+                ChatMessage(
+                    role="user",
+                    content=(
+                        TextContent("观察这张窗口截图"),
+                        ImageContent(path=image_path, authorized=True),
+                    ),
+                )
+            ],
+            tools=[],
+        )
+    except ProviderRequestError as exc:
+        assert exc.category == "privacy_gate"
+    else:
+        raise AssertionError("expected ProviderRequestError")
+
+    assert completions.requests == []
+
+
+def test_chat_provider_requires_per_image_authorization(tmp_path) -> None:
+    image_path = tmp_path / "window.bmp"
+    image_path.write_bytes(b"BMfake")
+    completions = FakeCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAICompatibleChatProvider(
+        "key",
+        "local-model",
+        client=client,
+        allow_image_input=True,
+    )
+
+    try:
+        provider.respond(
+            instructions="test",
+            input_items=[
+                ChatMessage(
+                    role="user",
+                    content=(
+                        TextContent("观察这张窗口截图"),
+                        ImageContent(path=image_path),
+                    ),
+                )
+            ],
+            tools=[],
+        )
+    except ProviderRequestError as exc:
+        assert exc.category == "privacy_gate"
+    else:
+        raise AssertionError("expected ProviderRequestError")
+
+    assert completions.requests == []
+
+
+def test_chat_provider_encodes_authorized_image_input(tmp_path) -> None:
+    image_path = tmp_path / "window.bmp"
+    image_path.write_bytes(b"BMfake")
+    completions = FakeCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAICompatibleChatProvider(
+        "key",
+        "local-model",
+        client=client,
+        allow_image_input=True,
+    )
+
+    provider.respond(
+        instructions="test",
+        input_items=[
+            ChatMessage(
+                role="user",
+                content=(
+                    TextContent("观察这张窗口截图"),
+                    ImageContent(
+                        path=image_path,
+                        media_type="image/bmp",
+                        detail="low",
+                        authorized=True,
+                        source_id="screenshot-1",
+                    ),
+                ),
+            )
+        ],
+        tools=[],
+    )
+
+    content = completions.requests[0]["messages"][1]["content"]
+    assert content[0] == {"type": "text", "text": "观察这张窗口截图"}
+    assert content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["detail"] == "low"
+    assert content[1]["image_url"]["url"].startswith("data:image/bmp;base64,")
+
+
 class FakeStreamingCompletions:
     def create(self, **kwargs: Any) -> Any:
         assert kwargs["stream"] is True
@@ -124,6 +228,26 @@ def test_provider_classifies_timeout() -> None:
         raise AssertionError("expected ProviderRequestError")
 
 
+def test_provider_classifies_unsupported_vision_error() -> None:
+    class BadRequestVisionError(Exception):
+        status_code = 400
+
+    class RejectingCompletions:
+        def create(self, **kwargs: Any) -> Any:
+            raise BadRequestVisionError("image input is not supported")
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=RejectingCompletions()))
+    provider = OpenAICompatibleChatProvider("key", "model", client=client)
+
+    try:
+        provider.respond(instructions="test", input_items=[], tools=[])
+    except ProviderRequestError as exc:
+        assert exc.category == "unsupported_feature"
+        assert not exc.retryable
+    else:
+        raise AssertionError("expected ProviderRequestError")
+
+
 def test_responses_provider_streams_semantic_events() -> None:
     final_response = SimpleNamespace(
         output=[{"type": "message", "role": "assistant", "content": "完成"}],
@@ -160,3 +284,50 @@ def test_responses_provider_streams_semantic_events() -> None:
     assert response.output_text == "完成"
     assert response.input_tokens == 7
     assert response.output_tokens == 1
+
+
+def test_responses_provider_encodes_authorized_image_input(tmp_path) -> None:
+    image_path = tmp_path / "window.bmp"
+    image_path.write_bytes(b"BMfake")
+
+    class FakeResponses:
+        def __init__(self) -> None:
+            self.requests: list[dict[str, Any]] = []
+
+        def create(self, **kwargs: Any) -> Any:
+            self.requests.append(kwargs)
+            return SimpleNamespace(
+                output=[],
+                output_text="",
+                model="response-model",
+                usage=None,
+            )
+
+    responses = FakeResponses()
+    client = SimpleNamespace(responses=responses)
+    provider = OpenAICompatibleResponsesProvider(
+        "key",
+        "response-model",
+        client=client,
+        allow_image_input=True,
+    )
+
+    provider.respond(
+        instructions="test",
+        input_items=[
+            ChatMessage(
+                role="user",
+                content=(
+                    TextContent("观察这张窗口截图"),
+                    ImageContent(path=image_path, detail="high", authorized=True),
+                ),
+            )
+        ],
+        tools=[],
+    )
+
+    content = responses.requests[0]["input"][0]["content"]
+    assert content[0] == {"type": "input_text", "text": "观察这张窗口截图"}
+    assert content[1]["type"] == "input_image"
+    assert content[1]["detail"] == "high"
+    assert content[1]["image_url"].startswith("data:image/bmp;base64,")

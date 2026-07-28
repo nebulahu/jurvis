@@ -38,8 +38,11 @@ def test_desktop_observation_tools_follow_control_switch(
     assert ("list_windows" in tool_names) is control_enabled
     assert ("get_active_window" in tool_names) is control_enabled
     assert ("inspect_window" in tool_names) is control_enabled
+    assert ("capture_window_screenshot" in tool_names) is control_enabled
     assert ("focus_window" in tool_names) is control_enabled
     assert ("invoke_element" in tool_names) is control_enabled
     assert ("select_element" in tool_names) is control_enabled
     assert ("set_element_value" in tool_names) is control_enabled
-    assert "click_coordinate" not in tool_names
+    assert ("send_shortcut" in tool_names) is control_enabled
+    assert ("scroll_element" in tool_names) is control_enabled
+    assert ("click_coordinate" in tool_names) is control_enabled

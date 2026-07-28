@@ -37,9 +37,18 @@ def build_agent(
             operation_timeout_seconds=(
                 settings.desktop_settings.operation_timeout_seconds
             ),
+            observation_timeout_seconds=(
+                settings.desktop_settings.observation_timeout_seconds
+            ),
+            focus_timeout_seconds=settings.desktop_settings.focus_timeout_seconds,
+            action_timeout_seconds=settings.desktop_settings.action_timeout_seconds,
             input_max_text_length=(
                 settings.desktop_settings.input_max_text_length
             ),
+            screenshot_max_width=settings.desktop_settings.screenshot_max_width,
+            screenshot_max_height=settings.desktop_settings.screenshot_max_height,
+            screenshot_ttl_seconds=settings.desktop_settings.screenshot_ttl_seconds,
+            screenshot_temp_dir=settings.desktop_settings.screenshot_temp_dir,
         )
     tools = build_default_registry(
         memory,
@@ -57,6 +66,7 @@ def build_agent(
         reasoning_effort=model.reasoning_effort,
         timeout_seconds=model.timeout_seconds,
         max_retries=model.max_retries,
+        allow_image_input=settings.desktop_settings.vision_enabled,
     )
     return JarvisAgent(
         provider=provider,

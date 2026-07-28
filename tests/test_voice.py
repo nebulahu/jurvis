@@ -292,3 +292,58 @@ def test_voice_mode_transcribes_chats_speaks_and_returns(monkeypatch, capsys) ->
     assert chats == [(agent, "贾维斯", "现在几点？")]
     assert speaker.spoken == ["现在是测试时间。"]
     assert "你> 现在几点？" in capsys.readouterr().out
+
+
+def test_voice_escape_cancels_pending_agent_actions(monkeypatch) -> None:
+    class FakeSpeaker:
+        def speak(self, text: str) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    class FakeAgent:
+        def __init__(self) -> None:
+            self.cancelled = 0
+
+        def cancel_pending_actions(self) -> None:
+            self.cancelled += 1
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.interrupted = 0
+            self.completed = 0
+
+        def mark_speaking(self) -> None:
+            return None
+
+        def interrupt(self) -> None:
+            self.interrupted += 1
+
+        def complete_turn(self) -> None:
+            self.completed += 1
+
+    def watch_and_interrupt(stop_event, callback):
+        callback()
+
+    def fake_chat(agent, assistant_name, text, on_text_delta=None):
+        if on_text_delta:
+            on_text_delta("测试。")
+        return "测试。"
+
+    monkeypatch.setattr(cli, "_watch_for_speech_interrupt", watch_and_interrupt)
+    monkeypatch.setattr(cli, "_chat_with_stream", fake_chat)
+    agent = FakeAgent()
+    session = FakeSession()
+
+    cli._run_voice_response(
+        agent,
+        SimpleNamespace(tts_enabled=True, assistant_name="贾维斯"),
+        session,
+        "测试",
+        FakeSpeaker(),
+    )
+
+    assert agent.cancelled == 1
+    assert session.interrupted >= 1
+    assert session.completed == 1

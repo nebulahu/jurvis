@@ -160,8 +160,46 @@ def test_agent_uses_runtime_risk_and_sanitized_argument_preview(tmp_path: Path) 
         arguments_json = connection.execute(
             "SELECT arguments_json FROM audit_log WHERE tool_name = 'dynamic_action'"
         ).fetchone()[0]
+        risk_level = connection.execute(
+            "SELECT risk_level FROM audit_log WHERE tool_name = 'dynamic_action'"
+        ).fetchone()[0]
     assert json.loads(arguments_json) == {
         "text_summary": "[已隐藏]",
         "text_length": 15,
     }
+    assert risk_level == 3
     assert "private payload" not in arguments_json
+
+
+def test_agent_clears_and_requests_tool_cancellation(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    cancelled = []
+    cleared = []
+
+    class NoToolProvider:
+        model = "fake-model"
+        api_mode = "chat_completions"
+
+        def respond(self, **kwargs):
+            return ModelResponse(
+                output_items=[ChatMessage(role="assistant", content="完成。")],
+                output_text="完成。",
+                model=self.model,
+            )
+
+    registry = ToolRegistry()
+    registry.register_cancellation(
+        lambda: cancelled.append(True),
+        lambda: cleared.append(True),
+    )
+    agent = JarvisAgent(
+        NoToolProvider(),
+        registry,
+        PermissionPolicy(1),
+        memory,
+    )
+
+    agent.cancel_pending_actions()
+    assert cancelled == [True]
+    assert agent.chat("继续") == "完成。"
+    assert cleared == [True]

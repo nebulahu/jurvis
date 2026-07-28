@@ -43,6 +43,10 @@ class UIAutomationController(UIAutomationReader, Protocol):
 
     def set_value(self, native_ref: object, value: str) -> None: ...
 
+    def scroll_element(
+        self, native_ref: object, *, direction: str, amount: str
+    ) -> None: ...
+
 
 def _truncate(value: object, max_length: int) -> str:
     text = str(value or "").strip()
@@ -315,3 +319,49 @@ class ComtypesUIAutomationReader:
             raise
         except (com_error, OSError) as exc:
             raise RuntimeError(f"UI Automation SetValue 执行失败：{exc}") from exc
+
+    def scroll_element(
+        self, native_ref: object, *, direction: str, amount: str
+    ) -> None:
+        module, _automation, com_error = self._load_runtime()
+        normalized_direction = direction.strip().casefold()
+        normalized_amount = amount.strip().casefold()
+        scroll_amounts = {
+            ("up", "large"): 0,
+            ("up", "small"): 1,
+            ("down", "large"): 3,
+            ("down", "small"): 4,
+            ("left", "large"): 0,
+            ("left", "small"): 1,
+            ("right", "large"): 3,
+            ("right", "small"): 4,
+        }
+        no_amount = 2
+        try:
+            if normalized_direction == "into_view":
+                unknown = native_ref.GetCurrentPattern(
+                    int(module.UIA_ScrollItemPatternId)
+                )
+                if not unknown:
+                    raise RuntimeError("目标元素不支持 ScrollItem Pattern")
+                scroll_item = unknown.QueryInterface(
+                    module.IUIAutomationScrollItemPattern
+                )
+                scroll_item.ScrollIntoView()
+                return
+
+            amount_value = scroll_amounts[(normalized_direction, normalized_amount)]
+            unknown = native_ref.GetCurrentPattern(int(module.UIA_ScrollPatternId))
+            if not unknown:
+                raise RuntimeError("目标元素不支持 Scroll Pattern")
+            scroll_pattern = unknown.QueryInterface(module.IUIAutomationScrollPattern)
+            if normalized_direction in {"up", "down"}:
+                scroll_pattern.Scroll(no_amount, amount_value)
+            elif normalized_direction in {"left", "right"}:
+                scroll_pattern.Scroll(amount_value, no_amount)
+            else:
+                raise ValueError(f"不支持的滚动方向：{direction}")
+        except ValueError:
+            raise
+        except (com_error, OSError) as exc:
+            raise RuntimeError(f"UI Automation Scroll 执行失败：{exc}") from exc

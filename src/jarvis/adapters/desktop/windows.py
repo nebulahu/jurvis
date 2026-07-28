@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from time import perf_counter
 
 from jarvis.adapters.desktop.uia import (
@@ -23,6 +24,7 @@ from jarvis.ports.desktop import (
     DesktopAction,
     DesktopActionKind,
     DesktopBounds,
+    DesktopScreenshot,
     DesktopSnapshot,
     ElementRef,
     WindowRef,
@@ -35,6 +37,24 @@ ProcessStarter = Callable[[Sequence[str]], None]
 WindowIdFactory = Callable[[], str]
 Clock = Callable[[], datetime]
 WindowActivator = Callable[["NativeWindowInfo"], None]
+ShortcutSender = Callable[[tuple[str, ...]], None]
+WindowCapturer = Callable[["NativeWindowInfo", Path, int, int], tuple[int, int]]
+CoordinateClicker = Callable[[int, int], None]
+
+
+_ALLOWED_SHORTCUTS: dict[str, tuple[str, ...]] = {
+    "copy": ("ctrl", "c"),
+    "cut": ("ctrl", "x"),
+    "paste": ("ctrl", "v"),
+    "undo": ("ctrl", "z"),
+    "redo": ("ctrl", "y"),
+    "select_all": ("ctrl", "a"),
+    "find": ("ctrl", "f"),
+    "save": ("ctrl", "s"),
+}
+
+_ALLOWED_SCROLL_DIRECTIONS = {"up", "down", "left", "right", "into_view"}
+_ALLOWED_SCROLL_AMOUNTS = {"small", "large"}
 
 
 def _normalize_name(value: str) -> str:
@@ -370,6 +390,248 @@ def _activate_native_window(window: NativeWindowInfo) -> None:
             user32.AttachThreadInput(current_thread, thread_id, False)
 
 
+def _send_windows_shortcut(keys: tuple[str, ...]) -> None:
+    if os.name != "nt":
+        raise RuntimeError("快捷键输入功能仅支持 Windows")
+    import ctypes
+    from ctypes import wintypes
+
+    virtual_keys = {
+        "ctrl": 0x11,
+        "shift": 0x10,
+        "alt": 0x12,
+        "a": 0x41,
+        "c": 0x43,
+        "f": 0x46,
+        "s": 0x53,
+        "v": 0x56,
+        "x": 0x58,
+        "y": 0x59,
+        "z": 0x5A,
+    }
+    try:
+        key_codes = tuple(virtual_keys[key] for key in keys)
+    except KeyError as exc:
+        raise ValueError(f"不支持的快捷键：{exc.args[0]}") from exc
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = (
+            ("wVk", wintypes.WORD),
+            ("wScan", wintypes.WORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        )
+
+    class INPUT_UNION(ctypes.Union):
+        _fields_ = (("ki", KEYBDINPUT),)
+
+    class INPUT(ctypes.Structure):
+        _fields_ = (("type", wintypes.DWORD), ("union", INPUT_UNION))
+
+    input_keyboard = 1
+    keyup = 0x0002
+    events: list[INPUT] = []
+    for key_code in key_codes:
+        events.append(
+            INPUT(
+                type=input_keyboard,
+                union=INPUT_UNION(ki=KEYBDINPUT(key_code, 0, 0, 0, None)),
+            )
+        )
+    for key_code in reversed(key_codes):
+        events.append(
+            INPUT(
+                type=input_keyboard,
+                union=INPUT_UNION(ki=KEYBDINPUT(key_code, 0, keyup, 0, None)),
+            )
+        )
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+    user32.SendInput.restype = wintypes.UINT
+    array_type = INPUT * len(events)
+    sent = user32.SendInput(len(events), array_type(*events), ctypes.sizeof(INPUT))
+    if int(sent) != len(events):
+        error = ctypes.get_last_error()
+        raise OSError(error, "SendInput 调用失败")
+
+
+def _click_windows_coordinate(x: int, y: int) -> None:
+    if os.name != "nt":
+        raise RuntimeError("坐标点击功能仅支持 Windows")
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+    user32.SetCursorPos.restype = wintypes.BOOL
+    user32.mouse_event.argtypes = [
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_ulong,
+    ]
+    user32.mouse_event.restype = None
+    if not user32.SetCursorPos(x, y):
+        raise OSError(ctypes.get_last_error(), "SetCursorPos 调用失败")
+    left_down = 0x0002
+    left_up = 0x0004
+    user32.mouse_event(left_down, 0, 0, 0, 0)
+    user32.mouse_event(left_up, 0, 0, 0, 0)
+
+
+def _write_bmp(path: Path, *, width: int, height: int, pixels: bytes) -> None:
+    row_size = ((width * 3 + 3) // 4) * 4
+    image_size = row_size * height
+    file_size = 54 + image_size
+    header = bytearray()
+    header.extend(b"BM")
+    header.extend(file_size.to_bytes(4, "little"))
+    header.extend((0).to_bytes(4, "little"))
+    header.extend((54).to_bytes(4, "little"))
+    header.extend((40).to_bytes(4, "little"))
+    header.extend(width.to_bytes(4, "little", signed=True))
+    header.extend(height.to_bytes(4, "little", signed=True))
+    header.extend((1).to_bytes(2, "little"))
+    header.extend((24).to_bytes(2, "little"))
+    header.extend((0).to_bytes(4, "little"))
+    header.extend(image_size.to_bytes(4, "little"))
+    header.extend((2835).to_bytes(4, "little"))
+    header.extend((2835).to_bytes(4, "little"))
+    header.extend((0).to_bytes(4, "little"))
+    header.extend((0).to_bytes(4, "little"))
+    with path.open("wb") as handle:
+        handle.write(header)
+        handle.write(pixels)
+
+
+def _capture_native_window_to_bmp(
+    window: NativeWindowInfo,
+    path: Path,
+    max_width: int,
+    max_height: int,
+) -> tuple[int, int]:
+    if os.name != "nt":
+        raise RuntimeError("窗口截图功能仅支持 Windows")
+    if window.width <= 0 or window.height <= 0:
+        raise RuntimeError("目标窗口尺寸无效，无法截图")
+    width = min(window.width, max_width)
+    height = min(window.height, max_height)
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+    user32.GetWindowDC.argtypes = [wintypes.HWND]
+    user32.GetWindowDC.restype = wintypes.HDC
+    user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+    user32.ReleaseDC.restype = ctypes.c_int
+    gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+    gdi32.CreateCompatibleDC.restype = wintypes.HDC
+    gdi32.CreateCompatibleBitmap.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+    gdi32.CreateCompatibleBitmap.restype = wintypes.HANDLE
+    gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HANDLE]
+    gdi32.SelectObject.restype = wintypes.HANDLE
+    gdi32.BitBlt.argtypes = [
+        wintypes.HDC,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.HDC,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.DWORD,
+    ]
+    gdi32.BitBlt.restype = wintypes.BOOL
+    gdi32.GetDIBits.argtypes = [
+        wintypes.HDC,
+        wintypes.HANDLE,
+        wintypes.UINT,
+        wintypes.UINT,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+        wintypes.UINT,
+    ]
+    gdi32.GetDIBits.restype = ctypes.c_int
+    gdi32.DeleteObject.argtypes = [wintypes.HANDLE]
+    gdi32.DeleteObject.restype = wintypes.BOOL
+    gdi32.DeleteDC.argtypes = [wintypes.HDC]
+    gdi32.DeleteDC.restype = wintypes.BOOL
+
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = (
+            ("biSize", wintypes.DWORD),
+            ("biWidth", ctypes.c_long),
+            ("biHeight", ctypes.c_long),
+            ("biPlanes", wintypes.WORD),
+            ("biBitCount", wintypes.WORD),
+            ("biCompression", wintypes.DWORD),
+            ("biSizeImage", wintypes.DWORD),
+            ("biXPelsPerMeter", ctypes.c_long),
+            ("biYPelsPerMeter", ctypes.c_long),
+            ("biClrUsed", wintypes.DWORD),
+            ("biClrImportant", wintypes.DWORD),
+        )
+
+    class BITMAPINFO(ctypes.Structure):
+        _fields_ = (
+            ("bmiHeader", BITMAPINFOHEADER),
+            ("bmiColors", wintypes.DWORD * 3),
+        )
+
+    source_dc = user32.GetWindowDC(window.handle)
+    if not source_dc:
+        raise OSError(ctypes.get_last_error(), "GetWindowDC 调用失败")
+    memory_dc = gdi32.CreateCompatibleDC(source_dc)
+    bitmap = gdi32.CreateCompatibleBitmap(source_dc, width, height)
+    try:
+        previous = gdi32.SelectObject(memory_dc, bitmap)
+        if not previous:
+            raise OSError(ctypes.get_last_error(), "SelectObject 调用失败")
+        srccopy = 0x00CC0020
+        if not gdi32.BitBlt(memory_dc, 0, 0, width, height, source_dc, 0, 0, srccopy):
+            raise OSError(ctypes.get_last_error(), "BitBlt 调用失败")
+        row_size = ((width * 3 + 3) // 4) * 4
+        pixels = ctypes.create_string_buffer(row_size * height)
+        bitmap_info = BITMAPINFO()
+        bitmap_info.bmiHeader = BITMAPINFOHEADER(
+            ctypes.sizeof(BITMAPINFOHEADER),
+            width,
+            height,
+            1,
+            24,
+            0,
+            row_size * height,
+            2835,
+            2835,
+            0,
+            0,
+        )
+        rows = gdi32.GetDIBits(
+            memory_dc,
+            bitmap,
+            0,
+            height,
+            pixels,
+            ctypes.byref(bitmap_info),
+            0,
+        )
+        if rows != height:
+            raise OSError(ctypes.get_last_error(), "GetDIBits 调用失败")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_bmp(path, width=width, height=height, pixels=pixels.raw)
+        return width, height
+    finally:
+        if bitmap:
+            gdi32.DeleteObject(bitmap)
+        if memory_dc:
+            gdi32.DeleteDC(memory_dc)
+        user32.ReleaseDC(window.handle, source_dc)
+
+
 def _load_windows_start_apps() -> list[tuple[str, str]]:
     if os.name != "nt":
         raise RuntimeError("应用启动功能仅支持 Windows")
@@ -524,7 +786,16 @@ class WindowsDesktopObserver:
         snapshot_max_text_length: int = 200,
         snapshot_ttl_seconds: float = 30.0,
         operation_timeout_seconds: float = 10.0,
+        observation_timeout_seconds: float | None = None,
+        focus_timeout_seconds: float | None = None,
+        action_timeout_seconds: float | None = None,
         input_max_text_length: int = 4000,
+        screenshot_id_factory: Callable[[], str] | None = None,
+        window_capturer: WindowCapturer | None = None,
+        screenshot_max_width: int = 1920,
+        screenshot_max_height: int = 1080,
+        screenshot_ttl_seconds: float = 60.0,
+        screenshot_temp_dir: Path | None = None,
     ) -> None:
         if snapshot_max_nodes < 1:
             raise ValueError("snapshot_max_nodes 必须大于 0")
@@ -536,8 +807,18 @@ class WindowsDesktopObserver:
             raise ValueError("snapshot_ttl_seconds 必须大于 0")
         if operation_timeout_seconds <= 0:
             raise ValueError("operation_timeout_seconds 必须大于 0")
+        if observation_timeout_seconds is not None and observation_timeout_seconds <= 0:
+            raise ValueError("observation_timeout_seconds 必须大于 0")
+        if focus_timeout_seconds is not None and focus_timeout_seconds <= 0:
+            raise ValueError("focus_timeout_seconds 必须大于 0")
+        if action_timeout_seconds is not None and action_timeout_seconds <= 0:
+            raise ValueError("action_timeout_seconds 必须大于 0")
         if input_max_text_length <= 0:
             raise ValueError("input_max_text_length 必须大于 0")
+        if screenshot_max_width <= 0 or screenshot_max_height <= 0:
+            raise ValueError("截图宽度和高度上限必须大于 0")
+        if screenshot_ttl_seconds <= 0:
+            raise ValueError("screenshot_ttl_seconds 必须大于 0")
         self._allowed_applications = _allowed_window_applications(allowed_applications)
         self._window_loader = window_loader or _load_windows_top_level_windows
         self._window_id_factory = window_id_factory or (
@@ -556,13 +837,32 @@ class WindowsDesktopObserver:
         self._snapshot_max_text_length = snapshot_max_text_length
         self._snapshot_ttl_seconds = snapshot_ttl_seconds
         self._operation_timeout_seconds = operation_timeout_seconds
+        self._observation_timeout_seconds = (
+            observation_timeout_seconds or operation_timeout_seconds
+        )
+        self._focus_timeout_seconds = focus_timeout_seconds or operation_timeout_seconds
+        self._action_timeout_seconds = action_timeout_seconds or operation_timeout_seconds
         self._input_max_text_length = input_max_text_length
+        self._screenshot_id_factory = screenshot_id_factory or (
+            lambda: f"screenshot-{secrets.token_urlsafe(12)}"
+        )
+        self._window_capturer = window_capturer or _capture_native_window_to_bmp
+        self._screenshot_max_width = screenshot_max_width
+        self._screenshot_max_height = screenshot_max_height
+        self._screenshot_ttl_seconds = screenshot_ttl_seconds
+        self._screenshot_temp_dir = (
+            Path(screenshot_temp_dir)
+            if screenshot_temp_dir is not None
+            else Path(os.getenv("TEMP", ".")) / "jarvis-screenshots"
+        )
         self._window_ids: dict[tuple[int, int], str] = {}
         self._native_windows: dict[str, NativeWindowInfo] = {}
         self._window_refs: dict[str, WindowRef] = {}
         self._snapshots: dict[str, DesktopSnapshot] = {}
         self._snapshot_expirations: dict[str, datetime] = {}
         self._native_elements: dict[tuple[str, str], object] = {}
+        self._screenshots: dict[str, DesktopScreenshot] = {}
+        self._screenshot_expirations: dict[str, datetime] = {}
 
     def _new_window_id(self) -> str:
         existing = set(self._window_ids.values())
@@ -572,11 +872,19 @@ class WindowsDesktopObserver:
                 return candidate
         raise RuntimeError("无法生成唯一窗口标识")
 
+    def _new_screenshot_id(self) -> str:
+        return self._new_scoped_id(
+            self._screenshot_id_factory, set(self._screenshots), "截图"
+        )
+
     def list_windows(self) -> tuple[WindowRef, ...]:
+        started = perf_counter()
         try:
             candidates = tuple(self._window_loader())
         except (OSError, RuntimeError, UnicodeError) as exc:
             raise RuntimeError(f"无法枚举 Windows 窗口：{exc}") from exc
+        if perf_counter() - started > self._observation_timeout_seconds:
+            raise TimeoutError("窗口枚举超过观察超时")
 
         current_identities: set[tuple[int, int]] = set()
         native_windows: dict[str, NativeWindowInfo] = {}
@@ -642,6 +950,7 @@ class WindowsDesktopObserver:
         raise RuntimeError(f"无法生成唯一{kind}标识")
 
     def inspect_window(self, window_id: str) -> DesktopSnapshot:
+        started = perf_counter()
         requested = window_id.strip()
         if not requested:
             raise ValueError("window_id 不能为空")
@@ -657,6 +966,8 @@ class WindowsDesktopObserver:
             max_depth=self._snapshot_max_depth,
             max_text_length=self._snapshot_max_text_length,
         )
+        if perf_counter() - started > self._observation_timeout_seconds:
+            raise TimeoutError("UI Automation 快照读取超过观察超时")
         snapshot_id = self._new_scoped_id(
             self._snapshot_id_factory, set(self._snapshots), "快照"
         )
@@ -729,12 +1040,80 @@ class WindowsDesktopObserver:
             raise TimeoutError("快照已过期")
         return snapshot
 
+    def get_screenshot(self, screenshot_id: str) -> DesktopScreenshot:
+        screenshot = self._screenshots.get(screenshot_id)
+        if screenshot is None:
+            raise KeyError("截图标识无效")
+        if self._clock() >= self._screenshot_expirations[screenshot_id]:
+            try:
+                screenshot.path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self._screenshots.pop(screenshot_id, None)
+            self._screenshot_expirations.pop(screenshot_id, None)
+            raise TimeoutError("截图已过期")
+        return screenshot
+
     def resolve_element(self, snapshot_id: str, element_id: str) -> ElementRef:
         snapshot = self.get_snapshot(snapshot_id)
         for element in snapshot.elements:
             if element.element_id == element_id:
                 return element
         raise KeyError("元素不属于指定快照")
+
+    def cleanup_screenshots(self) -> int:
+        now = self._clock()
+        removed = 0
+        for screenshot_id, screenshot in tuple(self._screenshots.items()):
+            if now < self._screenshot_expirations[screenshot_id]:
+                continue
+            try:
+                screenshot.path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self._screenshots.pop(screenshot_id, None)
+            self._screenshot_expirations.pop(screenshot_id, None)
+            removed += 1
+        return removed
+
+    def capture_window_screenshot(self, window_id: str) -> DesktopScreenshot:
+        started = perf_counter()
+        requested = window_id.strip()
+        if not requested:
+            raise ValueError("window_id 不能为空")
+        self.cleanup_screenshots()
+        self.list_windows()
+        native_window = self._native_windows.get(requested)
+        window_ref = self._window_refs.get(requested)
+        if native_window is None or window_ref is None:
+            raise KeyError("窗口标识无效、已关闭或不在允许列表中")
+
+        screenshot_id = self._new_screenshot_id()
+        path = self._screenshot_temp_dir / f"{screenshot_id}.bmp"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        width, height = self._window_capturer(
+            native_window,
+            path,
+            self._screenshot_max_width,
+            self._screenshot_max_height,
+        )
+        if perf_counter() - started > self._observation_timeout_seconds:
+            path.unlink(missing_ok=True)
+            raise TimeoutError("窗口截图超过观察超时")
+        created_at = self._clock()
+        expires_at = created_at + timedelta(seconds=self._screenshot_ttl_seconds)
+        screenshot = DesktopScreenshot(
+            screenshot_id=screenshot_id,
+            window=window_ref,
+            created_at=created_at,
+            expires_at=expires_at,
+            path=path,
+            width=width,
+            height=height,
+        )
+        self._screenshots[screenshot_id] = screenshot
+        self._screenshot_expirations[screenshot_id] = expires_at
+        return screenshot
 
 
 class WindowsDesktopController(WindowsDesktopObserver):
@@ -744,6 +1123,8 @@ class WindowsDesktopController(WindowsDesktopObserver):
         *,
         uia_controller: UIAutomationController | None = None,
         window_activator: WindowActivator | None = None,
+        shortcut_sender: ShortcutSender | None = None,
+        coordinate_clicker: CoordinateClicker | None = None,
         **observer_options,
     ) -> None:
         controller = uia_controller or ComtypesUIAutomationReader()
@@ -754,6 +1135,28 @@ class WindowsDesktopController(WindowsDesktopObserver):
         )
         self._uia_controller = controller
         self._window_activator = window_activator or _activate_native_window
+        self._shortcut_sender = shortcut_sender or _send_windows_shortcut
+        self._coordinate_clicker = coordinate_clicker or _click_windows_coordinate
+        self._cancel_requested = threading.Event()
+
+    def request_cancel(self) -> None:
+        self._cancel_requested.set()
+
+    def clear_cancel(self) -> None:
+        self._cancel_requested.clear()
+
+    def _cancelled_result(self, started: float, message: str) -> ActionResult:
+        return ActionResult(
+            status=ActionStatus.CANCELLED,
+            message=message,
+            evidence={"cancelled": True},
+            duration_ms=round((perf_counter() - started) * 1000),
+        )
+
+    def _check_cancelled(self, started: float) -> ActionResult | None:
+        if self._cancel_requested.is_set():
+            return self._cancelled_result(started, "桌面动作已被取消")
+        return None
 
     def get_window_ref(self, window_id: str) -> WindowRef:
         self.list_windows()
@@ -762,17 +1165,129 @@ class WindowsDesktopController(WindowsDesktopObserver):
         except KeyError as exc:
             raise KeyError("窗口标识无效、已关闭或不在允许列表中") from exc
 
+    def _require_foreground_window(self, window_id: str) -> WindowRef:
+        self.list_windows()
+        current = self._window_refs.get(window_id)
+        if current is None:
+            raise KeyError("窗口标识无效、已关闭或不在允许列表中")
+        if not current.is_foreground:
+            self.request_cancel()
+            raise RuntimeError("目标窗口不是当前前台窗口，拒绝执行绑定动作")
+        return current
+
+    def _verify_window_foreground(
+        self, window_id: str, *, started: float, evidence: dict[str, object]
+    ) -> ActionResult:
+        try:
+            self.list_windows()
+            current = self._window_refs.get(window_id)
+        except (OSError, RuntimeError, UnicodeError) as exc:
+            return ActionResult(
+                status=ActionStatus.AMBIGUOUS,
+                message=f"动作已发出，但无法重新读取窗口状态：{exc}",
+                evidence={**evidence, "verification": "window_read_failed"},
+                duration_ms=round((perf_counter() - started) * 1000),
+            )
+        if current is None:
+            self.request_cancel()
+            return ActionResult(
+                status=ActionStatus.AMBIGUOUS,
+                message="动作已发出，但目标窗口在验证时不可用",
+                evidence={**evidence, "verification": "window_missing"},
+                duration_ms=round((perf_counter() - started) * 1000),
+            )
+        if not current.is_foreground:
+            self.request_cancel()
+            return ActionResult(
+                status=ActionStatus.AMBIGUOUS,
+                message="动作已发出，但目标窗口验证时已不在前台",
+                evidence={**evidence, "verification": "foreground_lost"},
+                duration_ms=round((perf_counter() - started) * 1000),
+            )
+        return ActionResult(
+            status=ActionStatus.SUCCESS,
+            evidence={**evidence, "verification": "foreground"},
+            duration_ms=round((perf_counter() - started) * 1000),
+        )
+
+    def _verify_element_after_action(
+        self,
+        native_window: NativeWindowInfo,
+        element: ElementRef,
+        *,
+        pattern: str,
+        started: float,
+        evidence: dict[str, object],
+    ) -> ActionResult:
+        try:
+            inspection = self._uia_reader.inspect_window(
+                native_window.handle,
+                max_nodes=self._snapshot_max_nodes,
+                max_depth=self._snapshot_max_depth,
+                max_text_length=self._snapshot_max_text_length,
+            )
+        except (OSError, RuntimeError, UnicodeError) as exc:
+            return ActionResult(
+                status=ActionStatus.AMBIGUOUS,
+                message=f"动作已执行，但无法重新读取目标元素状态：{exc}",
+                evidence={**evidence, "verification": "element_read_failed"},
+                duration_ms=round((perf_counter() - started) * 1000),
+            )
+
+        for candidate in inspection.elements:
+            if candidate.is_password != element.is_sensitive:
+                continue
+            if candidate.role != element.role:
+                continue
+            if element.name and candidate.name != element.name:
+                continue
+            if pattern and pattern not in candidate.patterns:
+                continue
+            if not candidate.is_enabled or candidate.is_offscreen:
+                continue
+            return ActionResult(
+                status=ActionStatus.SUCCESS,
+                evidence={**evidence, "verification": "element_present"},
+                duration_ms=round((perf_counter() - started) * 1000),
+            )
+        return ActionResult(
+            status=ActionStatus.AMBIGUOUS,
+            message="动作已执行，但验证时未能重新定位目标元素",
+            evidence={**evidence, "verification": "element_not_found"},
+            duration_ms=round((perf_counter() - started) * 1000),
+        )
+
+    def _action_timed_out(
+        self, started: float, evidence: dict[str, object]
+    ) -> ActionResult | None:
+        if perf_counter() - started <= self._action_timeout_seconds:
+            return None
+        self.request_cancel()
+        return ActionResult(
+            status=ActionStatus.AMBIGUOUS,
+            message="动作已执行，但超过动作超时",
+            evidence={**evidence, "verification": "action_timeout"},
+            duration_ms=round((perf_counter() - started) * 1000),
+        )
+
     def execute_action(self, action: DesktopAction) -> ActionResult:
         started = perf_counter()
+        cancelled = self._check_cancelled(started)
+        if cancelled is not None:
+            return cancelled
         self.list_windows()
+        cancelled = self._check_cancelled(started)
+        if cancelled is not None:
+            return cancelled
         native_window = self._native_windows.get(action.window_id)
         if native_window is None:
+            self.request_cancel()
             raise KeyError("窗口标识无效、已关闭或不在允许列表中")
 
         if action.kind is DesktopActionKind.FOCUS_WINDOW:
             if not self._window_refs[action.window_id].is_foreground:
                 self._window_activator(native_window)
-            deadline = time.monotonic() + self._operation_timeout_seconds
+            deadline = time.monotonic() + self._focus_timeout_seconds
             while True:
                 windows = self.list_windows()
                 current = next(
@@ -784,6 +1299,7 @@ class WindowsDesktopController(WindowsDesktopObserver):
                     None,
                 )
                 if current is None:
+                    self.request_cancel()
                     raise RuntimeError("目标窗口在聚焦过程中关闭")
                 if current.is_foreground:
                     return ActionResult(
@@ -798,12 +1314,88 @@ class WindowsDesktopController(WindowsDesktopObserver):
                         evidence={"window_id": action.window_id, "foreground": False},
                         duration_ms=round((perf_counter() - started) * 1000),
                     )
+                cancelled = self._check_cancelled(started)
+                if cancelled is not None:
+                    return cancelled
                 time.sleep(0.05)
+
+        if action.kind is DesktopActionKind.SEND_KEYS:
+            self._require_foreground_window(action.window_id)
+            cancelled = self._check_cancelled(started)
+            if cancelled is not None:
+                return cancelled
+            shortcut = action.payload.get("shortcut")
+            if not isinstance(shortcut, str):
+                raise ValueError("快捷键动作必须提供字符串 shortcut")
+            normalized_shortcut = shortcut.strip().casefold().replace("-", "_")
+            keys = _ALLOWED_SHORTCUTS.get(normalized_shortcut)
+            if keys is None:
+                allowed = "、".join(sorted(_ALLOWED_SHORTCUTS))
+                raise PermissionError(f"快捷键不在允许清单中：{allowed}")
+            self._shortcut_sender(keys)
+            evidence = {
+                "window_id": action.window_id,
+                "shortcut": normalized_shortcut,
+                "keys": list(keys),
+            }
+            timed_out = self._action_timed_out(started, evidence)
+            if timed_out is not None:
+                return timed_out
+            return self._verify_window_foreground(
+                action.window_id,
+                started=started,
+                evidence=evidence,
+            )
+
+        if action.kind is DesktopActionKind.CLICK_COORDINATE:
+            current_window = self._require_foreground_window(action.window_id)
+            cancelled = self._check_cancelled(started)
+            if cancelled is not None:
+                return cancelled
+            screenshot_id = action.payload.get("screenshot_id")
+            x_value = action.payload.get("x")
+            y_value = action.payload.get("y")
+            if not isinstance(screenshot_id, str) or not screenshot_id.strip():
+                raise ValueError("坐标动作必须提供 screenshot_id")
+            if not isinstance(x_value, int) or not isinstance(y_value, int):
+                raise ValueError("坐标动作必须提供整数 x 和 y")
+            screenshot = self.get_screenshot(screenshot_id.strip())
+            if screenshot.window.window_id != action.window_id:
+                raise PermissionError("截图不属于目标窗口")
+            if x_value < 0 or y_value < 0:
+                raise PermissionError("坐标不能为负数")
+            if x_value >= screenshot.width or y_value >= screenshot.height:
+                raise PermissionError("坐标超出截图边界")
+            if screenshot.window.bounds != current_window.bounds:
+                self.request_cancel()
+                raise RuntimeError("目标窗口位置或尺寸已变化，拒绝使用旧截图坐标")
+            if current_window.bounds is None:
+                raise RuntimeError("目标窗口缺少边界信息，无法执行坐标动作")
+            screen_x = current_window.bounds.left + x_value
+            screen_y = current_window.bounds.top + y_value
+            self._coordinate_clicker(screen_x, screen_y)
+            evidence = {
+                "window_id": action.window_id,
+                "screenshot_id": screenshot.screenshot_id,
+                "x": x_value,
+                "y": y_value,
+                "screen_x": screen_x,
+                "screen_y": screen_y,
+            }
+            timed_out = self._action_timed_out(started, evidence)
+            if timed_out is not None:
+                return timed_out
+            return self._verify_window_foreground(
+                action.window_id,
+                started=started,
+                evidence=evidence,
+            )
 
         if action.kind not in {
             DesktopActionKind.INVOKE,
             DesktopActionKind.SELECT,
             DesktopActionKind.SET_VALUE,
+            DesktopActionKind.SCROLL,
         }:
             raise PermissionError(f"当前不支持桌面动作：{action.kind.value}")
         if not action.snapshot_id or not action.element_id:
@@ -816,6 +1408,74 @@ class WindowsDesktopController(WindowsDesktopObserver):
             raise RuntimeError("目标元素当前不可用")
         if element.is_offscreen:
             raise RuntimeError("目标元素当前不在屏幕内")
+
+        if action.kind is DesktopActionKind.SCROLL:
+            self._require_foreground_window(action.window_id)
+            cancelled = self._check_cancelled(started)
+            if cancelled is not None:
+                return cancelled
+            direction = action.payload.get("direction")
+            amount = action.payload.get("amount", "small")
+            if not isinstance(direction, str) or not isinstance(amount, str):
+                raise ValueError("滚动动作必须提供字符串 direction 和 amount")
+            normalized_direction = direction.strip().casefold()
+            normalized_amount = amount.strip().casefold()
+            if normalized_direction not in _ALLOWED_SCROLL_DIRECTIONS:
+                raise PermissionError("滚动方向不在允许清单中")
+            if normalized_amount not in _ALLOWED_SCROLL_AMOUNTS:
+                raise PermissionError("滚动幅度不在允许清单中")
+            if normalized_direction == "into_view":
+                if "ScrollItem" not in element.patterns:
+                    raise RuntimeError("目标元素不支持 ScrollItem Pattern")
+            elif "Scroll" not in element.patterns:
+                raise RuntimeError("目标元素不支持 Scroll Pattern")
+            native_ref = self._native_elements.get(
+                (action.snapshot_id, action.element_id)
+            )
+            if native_ref is None:
+                raise RuntimeError("目标元素的原生引用无效或已过期")
+            cancelled = self._check_cancelled(started)
+            if cancelled is not None:
+                return cancelled
+            try:
+                self._uia_controller.scroll_element(
+                    native_ref,
+                    direction=normalized_direction,
+                    amount=normalized_amount,
+                )
+            except RuntimeError as exc:
+                self._discard_snapshot(action.snapshot_id)
+                return ActionResult(
+                    status=ActionStatus.FAILED,
+                    message=f"UI Automation Scroll 执行失败：{exc}",
+                    evidence={
+                        "window_id": action.window_id,
+                        "element_id": action.element_id,
+                        "direction": normalized_direction,
+                        "amount": normalized_amount,
+                        "attempts": 1,
+                    },
+                    duration_ms=round((perf_counter() - started) * 1000),
+                )
+            finally:
+                if action.snapshot_id in self._snapshots:
+                    self._discard_snapshot(action.snapshot_id)
+            evidence = {
+                "window_id": action.window_id,
+                "element_id": action.element_id,
+                "direction": normalized_direction,
+                "amount": normalized_amount,
+            }
+            timed_out = self._action_timed_out(started, evidence)
+            if timed_out is not None:
+                return timed_out
+            return self._verify_element_after_action(
+                native_window,
+                element,
+                pattern=("ScrollItem" if normalized_direction == "into_view" else "Scroll"),
+                started=started,
+                evidence=evidence,
+            )
 
         if action.kind is DesktopActionKind.SET_VALUE:
             value = action.payload.get("text")
@@ -834,19 +1494,53 @@ class WindowsDesktopController(WindowsDesktopObserver):
             )
             if native_ref is None:
                 raise RuntimeError("目标元素的原生引用无效或已过期")
-            try:
-                self._uia_controller.set_value(native_ref, value)
-            finally:
-                self._discard_snapshot(action.snapshot_id)
-            return ActionResult(
-                status=ActionStatus.SUCCESS,
-                evidence={
-                    "window_id": action.window_id,
-                    "element_id": action.element_id,
-                    "pattern": "Value",
-                    "text_length": len(value),
-                },
-                duration_ms=round((perf_counter() - started) * 1000),
+            cancelled = self._check_cancelled(started)
+            if cancelled is not None:
+                return cancelled
+            set_error: Exception | None = None
+            attempts = 0
+            for attempt in range(2):
+                attempts = attempt + 1
+                try:
+                    self._uia_controller.set_value(native_ref, value)
+                    set_error = None
+                    break
+                except PermissionError as exc:
+                    set_error = exc
+                    break
+                except RuntimeError as exc:
+                    set_error = exc
+                    if attempt == 1:
+                        break
+            self._discard_snapshot(action.snapshot_id)
+            if set_error is not None:
+                return ActionResult(
+                    status=ActionStatus.FAILED,
+                    message=f"UI Automation SetValue 执行失败：{set_error}",
+                    evidence={
+                        "window_id": action.window_id,
+                        "element_id": action.element_id,
+                        "pattern": "Value",
+                        "attempts": attempts,
+                    },
+                    duration_ms=round((perf_counter() - started) * 1000),
+                )
+            evidence = {
+                "window_id": action.window_id,
+                "element_id": action.element_id,
+                "pattern": "Value",
+                "text_length": len(value),
+                "attempts": attempts,
+            }
+            timed_out = self._action_timed_out(started, evidence)
+            if timed_out is not None:
+                return timed_out
+            return self._verify_element_after_action(
+                native_window,
+                element,
+                pattern="Value",
+                started=started,
+                evidence=evidence,
             )
 
         required_pattern = (
@@ -863,16 +1557,39 @@ class WindowsDesktopController(WindowsDesktopObserver):
         if native_ref is None:
             raise RuntimeError("目标元素的原生引用无效或已过期")
 
+        cancelled = self._check_cancelled(started)
+        if cancelled is not None:
+            return cancelled
         try:
             self._uia_controller.invoke_element(native_ref, controller_pattern)
-        finally:
+        except RuntimeError as exc:
             self._discard_snapshot(action.snapshot_id)
-        return ActionResult(
-            status=ActionStatus.SUCCESS,
-            evidence={
-                "window_id": action.window_id,
-                "element_id": action.element_id,
-                "pattern": controller_pattern,
-            },
-            duration_ms=round((perf_counter() - started) * 1000),
+            return ActionResult(
+                status=ActionStatus.FAILED,
+                message=f"UI Automation {controller_pattern} 执行失败：{exc}",
+                evidence={
+                    "window_id": action.window_id,
+                    "element_id": action.element_id,
+                    "pattern": controller_pattern,
+                    "attempts": 1,
+                },
+                duration_ms=round((perf_counter() - started) * 1000),
+            )
+        finally:
+            if action.snapshot_id in self._snapshots:
+                self._discard_snapshot(action.snapshot_id)
+        evidence = {
+            "window_id": action.window_id,
+            "element_id": action.element_id,
+            "pattern": controller_pattern,
+        }
+        timed_out = self._action_timed_out(started, evidence)
+        if timed_out is not None:
+            return timed_out
+        return self._verify_element_after_action(
+            native_window,
+            element,
+            pattern=required_pattern,
+            started=started,
+            evidence=evidence,
         )

@@ -42,4 +42,7 @@ class AssistantStore(Protocol):
         allowed: bool,
         reason: str,
         result: str,
+        risk_level: int = 0,
     ) -> None: ...
+
+    def audit_metrics(self) -> dict[str, Any]: ...

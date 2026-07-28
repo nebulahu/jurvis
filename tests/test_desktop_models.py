@@ -9,6 +9,7 @@ from jarvis.ports.desktop import (
     DesktopAction,
     DesktopActionKind,
     DesktopBounds,
+    DesktopScreenshot,
     DesktopSnapshot,
     ElementRef,
     WindowRef,
@@ -60,16 +61,27 @@ def test_desktop_domain_models_are_json_serializable() -> None:
         duration_ms=42,
         snapshot_id="snapshot-2",
     )
+    screenshot = DesktopScreenshot(
+        screenshot_id="screenshot-1",
+        window=window,
+        created_at=datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc),
+        expires_at=datetime(2026, 7, 27, 12, 1, tzinfo=timezone.utc),
+        path=__file__,
+        width=640,
+        height=480,
+    )
 
     payload = {
         "snapshot": snapshot.to_dict(),
         "action": action.to_dict(),
         "result": result.to_dict(),
+        "screenshot": screenshot.to_dict(),
     }
 
     assert json.loads(json.dumps(payload, ensure_ascii=False)) == payload
     assert payload["action"]["kind"] == "set_value"
     assert payload["result"]["status"] == "success"
+    assert payload["screenshot"]["external_transmission"] is False
 
 
 def test_snapshot_rejects_elements_from_another_snapshot() -> None:

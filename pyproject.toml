@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jarvis-assistant"
-version = "0.5.0"
+version = "0.6.0"
 description = "一个安全、可扩展、带 Obsidian 长期记忆的个人 AI 助手"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import base64
 from time import perf_counter
 from typing import Any
 
 from jarvis.application.models import (
     ChatMessage,
     ConversationItem,
+    ImageContent,
+    MessageContent,
     ModelResponse,
+    TextContent,
     ToolCall,
     ToolResult,
     normalize_conversation_item,
@@ -54,6 +58,85 @@ def _usage_counts(usage: Any) -> tuple[int, int]:
     return int(input_tokens), int(output_tokens)
 
 
+def _content_has_image(content: MessageContent) -> bool:
+    return isinstance(content, tuple) and any(
+        isinstance(part, ImageContent) for part in content
+    )
+
+
+def _image_data_url(image: ImageContent) -> str:
+    data = image.path.read_bytes()
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:{image.media_type};base64,{encoded}"
+
+
+def _ensure_image_allowed(
+    image: ImageContent, *, allow_image_input: bool
+) -> None:
+    if not allow_image_input:
+        raise ProviderRequestError(
+            "图像输入默认关闭；需要显式开启视觉发送后才可把截图发送给模型。",
+            category="privacy_gate",
+        )
+    if not image.authorized:
+        raise ProviderRequestError(
+            "图像输入缺少本次用户授权，已阻止发送截图。",
+            category="privacy_gate",
+        )
+    if not image.path.is_file():
+        raise ProviderRequestError(
+            "图像输入文件不存在或已被清理。",
+            category="invalid_request",
+        )
+
+
+def _content_to_text(content: MessageContent) -> str:
+    if isinstance(content, str):
+        return content
+    return "\n".join(part.text for part in content if isinstance(part, TextContent))
+
+
+def _responses_content_parts(
+    content: MessageContent, *, allow_image_input: bool
+) -> str | list[dict[str, Any]]:
+    if isinstance(content, str):
+        return content
+    parts: list[dict[str, Any]] = []
+    for part in content:
+        if isinstance(part, TextContent):
+            parts.append({"type": "input_text", "text": part.text})
+            continue
+        _ensure_image_allowed(part, allow_image_input=allow_image_input)
+        parts.append(
+            {
+                "type": "input_image",
+                "image_url": _image_data_url(part),
+                "detail": part.detail,
+            }
+        )
+    return parts
+
+
+def _chat_content_parts(
+    content: MessageContent, *, allow_image_input: bool
+) -> str | list[dict[str, Any]]:
+    if isinstance(content, str):
+        return content
+    parts: list[dict[str, Any]] = []
+    for part in content:
+        if isinstance(part, TextContent):
+            parts.append({"type": "text", "text": part.text})
+            continue
+        _ensure_image_allowed(part, allow_image_input=allow_image_input)
+        parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": _image_data_url(part), "detail": part.detail},
+            }
+        )
+    return parts
+
+
 def _provider_error(exc: Exception) -> ProviderRequestError:
     if isinstance(exc, ProviderRequestError):
         return exc
@@ -66,6 +149,16 @@ def _provider_error(exc: Exception) -> ProviderRequestError:
             status_code=status_code,
         )
     if status_code in {400, 404, 422}:
+        message = str(exc).casefold()
+        if any(
+            marker in message
+            for marker in ("image", "vision", "multimodal", "multi-modal", "视觉", "图像")
+        ):
+            return ProviderRequestError(
+                "模型服务不支持当前图像输入请求；请关闭视觉发送或切换支持视觉的模型/API 模式。",
+                category="unsupported_feature",
+                status_code=status_code,
+            )
         return ProviderRequestError(
             "模型服务拒绝了请求，请检查 Base URL、模型名称和 API 模式。",
             category="invalid_request",
@@ -143,6 +236,7 @@ class OpenAICompatibleResponsesProvider(_ProviderBase):
         reasoning_effort: str | None = None,
         timeout_seconds: float = 60.0,
         max_retries: int = 2,
+        allow_image_input: bool = False,
         client: Any | None = None,
     ) -> None:
         self.client = client or _create_client(
@@ -151,6 +245,7 @@ class OpenAICompatibleResponsesProvider(_ProviderBase):
         self.model = model
         self.api_mode = "responses"
         self.reasoning_effort = reasoning_effort
+        self.allow_image_input = allow_image_input
 
     def respond(
         self,
@@ -163,7 +258,10 @@ class OpenAICompatibleResponsesProvider(_ProviderBase):
         request: dict[str, Any] = {
             "model": self.model,
             "instructions": instructions,
-            "input": _conversation_to_responses_input(input_items),
+            "input": _conversation_to_responses_input(
+                input_items,
+                allow_image_input=self.allow_image_input,
+            ),
             "tools": tools,
             "store": False,
         }
@@ -232,12 +330,22 @@ def _message_content(item: Any) -> str:
 
 def _conversation_to_responses_input(
     input_items: list[ConversationItem],
+    *,
+    allow_image_input: bool = False,
 ) -> list[dict[str, Any]]:
     converted: list[dict[str, Any]] = []
     for raw_item in input_items:
         item = normalize_conversation_item(raw_item)
         if isinstance(item, ChatMessage):
-            converted.append({"role": item.role, "content": item.content})
+            converted.append(
+                {
+                    "role": item.role,
+                    "content": _responses_content_parts(
+                        item.content,
+                        allow_image_input=allow_image_input,
+                    ),
+                }
+            )
         elif isinstance(item, ToolCall):
             converted.append(
                 {
@@ -259,7 +367,10 @@ def _conversation_to_responses_input(
 
 
 def _conversation_to_chat(
-    instructions: str, input_items: list[ConversationItem]
+    instructions: str,
+    input_items: list[ConversationItem],
+    *,
+    allow_image_input: bool = False,
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [{"role": "system", "content": instructions}]
     pending_calls: list[dict[str, Any]] = []
@@ -295,7 +406,15 @@ def _conversation_to_chat(
             )
             continue
 
-        messages.append({"role": item.role, "content": item.content})
+        messages.append(
+            {
+                "role": item.role,
+                "content": _chat_content_parts(
+                    item.content,
+                    allow_image_input=allow_image_input,
+                ),
+            }
+        )
 
     flush_calls()
     return messages
@@ -309,6 +428,7 @@ class OpenAICompatibleChatProvider(_ProviderBase):
         base_url: str | None = None,
         timeout_seconds: float = 60.0,
         max_retries: int = 2,
+        allow_image_input: bool = False,
         client: Any | None = None,
     ) -> None:
         self.client = client or _create_client(
@@ -316,6 +436,7 @@ class OpenAICompatibleChatProvider(_ProviderBase):
         )
         self.model = model
         self.api_mode = "chat_completions"
+        self.allow_image_input = allow_image_input
 
     def respond(
         self,
@@ -327,7 +448,11 @@ class OpenAICompatibleChatProvider(_ProviderBase):
     ) -> ModelResponse:
         request = {
             "model": self.model,
-            "messages": _conversation_to_chat(instructions, input_items),
+            "messages": _conversation_to_chat(
+                instructions,
+                input_items,
+                allow_image_input=self.allow_image_input,
+            ),
             "tools": [_chat_tool_schema(tool) for tool in tools],
         }
         try:
@@ -428,6 +553,7 @@ def build_provider(
     reasoning_effort: str | None = None,
     timeout_seconds: float = 60.0,
     max_retries: int = 2,
+    allow_image_input: bool = False,
 ) -> ModelProvider:
     if api_mode == "responses":
         return OpenAICompatibleResponsesProvider(
@@ -437,6 +563,7 @@ def build_provider(
             reasoning_effort=reasoning_effort,
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
+            allow_image_input=allow_image_input,
         )
     if api_mode == "chat_completions":
         return OpenAICompatibleChatProvider(
@@ -445,6 +572,7 @@ def build_provider(
             base_url=base_url,
             timeout_seconds=timeout_seconds,
             max_retries=max_retries,
+            allow_image_input=allow_image_input,
         )
     raise ValueError(f"不支持的 API 模式：{api_mode}")
 

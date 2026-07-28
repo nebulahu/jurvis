@@ -45,6 +45,16 @@ def _show_status(agent: JarvisAgent, settings: Settings) -> None:
             f"{latest['status']}，{latest['latency_ms']} ms，"
             f"输入/输出 Token={latest['input_tokens']}/{latest['output_tokens']}"
         )
+    audit_metrics = agent.memory.audit_metrics()
+    if audit_metrics["total"]:
+        print(
+            "工具审计："
+            f"总数={audit_metrics['total']}，"
+            f"成功率={audit_metrics['success_rate']:.0%}，"
+            f"超时率={audit_metrics['timeout_rate']:.0%}，"
+            f"歧义率={audit_metrics['ambiguous_rate']:.0%}，"
+            f"拒绝率={audit_metrics['user_rejection_rate']:.0%}"
+        )
 
 
 def _chat_with_stream(
@@ -139,6 +149,7 @@ def _run_voice_response(
     watcher_stop = threading.Event()
 
     def interrupt_speech() -> None:
+        agent.cancel_pending_actions()
         player.interrupt()
         session.interrupt()
 

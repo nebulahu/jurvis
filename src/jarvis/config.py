@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -96,7 +97,15 @@ class DesktopSettings:
     snapshot_max_text_length: int
     snapshot_ttl_seconds: float
     operation_timeout_seconds: float
+    observation_timeout_seconds: float
+    focus_timeout_seconds: float
+    action_timeout_seconds: float
     input_max_text_length: int
+    screenshot_max_width: int
+    screenshot_max_height: int
+    screenshot_ttl_seconds: float
+    screenshot_temp_dir: Path
+    vision_enabled: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,8 +220,40 @@ class Settings:
         return self.desktop_settings.operation_timeout_seconds
 
     @property
+    def desktop_observation_timeout_seconds(self) -> float:
+        return self.desktop_settings.observation_timeout_seconds
+
+    @property
+    def desktop_focus_timeout_seconds(self) -> float:
+        return self.desktop_settings.focus_timeout_seconds
+
+    @property
+    def desktop_action_timeout_seconds(self) -> float:
+        return self.desktop_settings.action_timeout_seconds
+
+    @property
     def desktop_input_max_text_length(self) -> int:
         return self.desktop_settings.input_max_text_length
+
+    @property
+    def desktop_screenshot_max_width(self) -> int:
+        return self.desktop_settings.screenshot_max_width
+
+    @property
+    def desktop_screenshot_max_height(self) -> int:
+        return self.desktop_settings.screenshot_max_height
+
+    @property
+    def desktop_screenshot_ttl_seconds(self) -> float:
+        return self.desktop_settings.screenshot_ttl_seconds
+
+    @property
+    def desktop_screenshot_temp_dir(self) -> Path:
+        return self.desktop_settings.screenshot_temp_dir
+
+    @property
+    def desktop_vision_enabled(self) -> bool:
+        return self.desktop_settings.vision_enabled
 
     @property
     def stt_api_key(self) -> str | None:
@@ -340,6 +381,33 @@ class Settings:
                 "JARVIS_DESKTOP_OPERATION_TIMEOUT_SECONDS 必须在 1 到 120 之间"
             )
 
+        desktop_observation_timeout = _env_float(
+            "JARVIS_DESKTOP_OBSERVATION_TIMEOUT_SECONDS",
+            desktop_operation_timeout,
+        )
+        if not 1 <= desktop_observation_timeout <= 120:
+            raise ValueError(
+                "JARVIS_DESKTOP_OBSERVATION_TIMEOUT_SECONDS 必须在 1 到 120 之间"
+            )
+
+        desktop_focus_timeout = _env_float(
+            "JARVIS_DESKTOP_FOCUS_TIMEOUT_SECONDS",
+            desktop_operation_timeout,
+        )
+        if not 1 <= desktop_focus_timeout <= 120:
+            raise ValueError(
+                "JARVIS_DESKTOP_FOCUS_TIMEOUT_SECONDS 必须在 1 到 120 之间"
+            )
+
+        desktop_action_timeout = _env_float(
+            "JARVIS_DESKTOP_ACTION_TIMEOUT_SECONDS",
+            desktop_operation_timeout,
+        )
+        if not 1 <= desktop_action_timeout <= 120:
+            raise ValueError(
+                "JARVIS_DESKTOP_ACTION_TIMEOUT_SECONDS 必须在 1 到 120 之间"
+            )
+
         input_max_text_length = _env_int(
             "JARVIS_DESKTOP_INPUT_MAX_TEXT_LENGTH", 4000
         )
@@ -347,6 +415,35 @@ class Settings:
             raise ValueError(
                 "JARVIS_DESKTOP_INPUT_MAX_TEXT_LENGTH 必须在 1 到 20000 之间"
             )
+
+        screenshot_max_width = _env_int("JARVIS_DESKTOP_SCREENSHOT_MAX_WIDTH", 1920)
+        if not 100 <= screenshot_max_width <= 7680:
+            raise ValueError(
+                "JARVIS_DESKTOP_SCREENSHOT_MAX_WIDTH 必须在 100 到 7680 之间"
+            )
+
+        screenshot_max_height = _env_int(
+            "JARVIS_DESKTOP_SCREENSHOT_MAX_HEIGHT", 1080
+        )
+        if not 100 <= screenshot_max_height <= 4320:
+            raise ValueError(
+                "JARVIS_DESKTOP_SCREENSHOT_MAX_HEIGHT 必须在 100 到 4320 之间"
+            )
+
+        screenshot_ttl_seconds = _env_float(
+            "JARVIS_DESKTOP_SCREENSHOT_TTL_SECONDS", 60.0
+        )
+        if not 5 <= screenshot_ttl_seconds <= 3600:
+            raise ValueError(
+                "JARVIS_DESKTOP_SCREENSHOT_TTL_SECONDS 必须在 5 到 3600 之间"
+            )
+
+        screenshot_temp_dir_raw = os.getenv("JARVIS_DESKTOP_SCREENSHOT_TEMP_DIR")
+        screenshot_temp_dir = Path(
+            screenshot_temp_dir_raw.strip()
+            if screenshot_temp_dir_raw and screenshot_temp_dir_raw.strip()
+            else str(Path(tempfile.gettempdir()) / "jarvis-screenshots")
+        ).expanduser()
 
         auto_approve = _env_int("JARVIS_AUTO_APPROVE_LEVEL", 1)
         if not 0 <= auto_approve <= 3:
@@ -445,7 +542,15 @@ class Settings:
                 snapshot_max_text_length=snapshot_max_text_length,
                 snapshot_ttl_seconds=snapshot_ttl_seconds,
                 operation_timeout_seconds=desktop_operation_timeout,
+                observation_timeout_seconds=desktop_observation_timeout,
+                focus_timeout_seconds=desktop_focus_timeout,
+                action_timeout_seconds=desktop_action_timeout,
                 input_max_text_length=input_max_text_length,
+                screenshot_max_width=screenshot_max_width,
+                screenshot_max_height=screenshot_max_height,
+                screenshot_ttl_seconds=screenshot_ttl_seconds,
+                screenshot_temp_dir=screenshot_temp_dir,
+                vision_enabled=_env_bool("JARVIS_DESKTOP_VISION_ENABLED", False),
             ),
             voice_settings=VoiceSettings(
                 stt_api_key=os.getenv("OPEN_STT_API_KEY") or api_key,

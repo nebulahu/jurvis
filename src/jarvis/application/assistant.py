@@ -62,6 +62,9 @@ class JarvisAgent:
     def clear_history(self) -> None:
         self.history.clear()
 
+    def cancel_pending_actions(self) -> None:
+        self.tools.request_cancellation()
+
     def _trim_history(self) -> None:
         if len(self.history) <= self.max_history_items:
             return
@@ -76,6 +79,7 @@ class JarvisAgent:
         user_text: str,
         on_text_delta: Callable[[str], None] | None = None,
     ) -> str:
+        self.tools.clear_cancellation()
         self._trim_history()
         self.memory.add_conversation("user", user_text)
         self.history.append(ChatMessage(role="user", content=user_text))
@@ -144,6 +148,7 @@ class JarvisAgent:
                         decision.allowed,
                         decision.reason,
                         result,
+                        int(risk),
                     )
                 except Exception as exc:
                     arguments = {}

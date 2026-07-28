@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Protocol
 
 
@@ -129,12 +130,46 @@ class DesktopSnapshot:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class DesktopScreenshot:
+    screenshot_id: str
+    window: WindowRef
+    created_at: datetime
+    expires_at: datetime
+    path: Path
+    width: int
+    height: int
+
+    def __post_init__(self) -> None:
+        _require_text(self.screenshot_id, "screenshot_id")
+        if self.created_at.tzinfo is None or self.created_at.utcoffset() is None:
+            raise ValueError("created_at 必须包含时区")
+        if self.expires_at.tzinfo is None or self.expires_at.utcoffset() is None:
+            raise ValueError("expires_at 必须包含时区")
+        if self.expires_at <= self.created_at:
+            raise ValueError("expires_at 必须晚于 created_at")
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("截图宽度和高度必须大于 0")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "screenshot_id": self.screenshot_id,
+            "window": self.window.to_dict(),
+            "created_at": self.created_at.isoformat(),
+            "expires_at": self.expires_at.isoformat(),
+            "path": str(self.path),
+            "width": self.width,
+            "height": self.height,
+            "external_transmission": False,
+        }
+
+
 class DesktopActionKind(StrEnum):
     FOCUS_WINDOW = "focus_window"
     INVOKE = "invoke"
     SELECT = "select"
     SET_VALUE = "set_value"
-    SEND_KEYS = "send_keys"
+    SEND_KEYS = "send_shortcut"
     SCROLL = "scroll"
     CLICK_COORDINATE = "click_coordinate"
 
@@ -202,9 +237,15 @@ class DesktopObserver(Protocol):
 
     def inspect_window(self, window_id: str) -> DesktopSnapshot: ...
 
+    def capture_window_screenshot(self, window_id: str) -> DesktopScreenshot: ...
+
+    def cleanup_screenshots(self) -> int: ...
+
 
 class DesktopController(DesktopObserver, Protocol):
     def get_window_ref(self, window_id: str) -> WindowRef: ...
+
+    def get_screenshot(self, screenshot_id: str) -> DesktopScreenshot: ...
 
     def get_snapshot(self, snapshot_id: str) -> DesktopSnapshot: ...
 

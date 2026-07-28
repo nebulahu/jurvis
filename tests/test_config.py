@@ -26,7 +26,15 @@ ENV_NAMES = [
     "JARVIS_DESKTOP_SNAPSHOT_MAX_TEXT_LENGTH",
     "JARVIS_DESKTOP_SNAPSHOT_TTL_SECONDS",
     "JARVIS_DESKTOP_OPERATION_TIMEOUT_SECONDS",
+    "JARVIS_DESKTOP_OBSERVATION_TIMEOUT_SECONDS",
+    "JARVIS_DESKTOP_FOCUS_TIMEOUT_SECONDS",
+    "JARVIS_DESKTOP_ACTION_TIMEOUT_SECONDS",
     "JARVIS_DESKTOP_INPUT_MAX_TEXT_LENGTH",
+    "JARVIS_DESKTOP_SCREENSHOT_MAX_WIDTH",
+    "JARVIS_DESKTOP_SCREENSHOT_MAX_HEIGHT",
+    "JARVIS_DESKTOP_SCREENSHOT_TTL_SECONDS",
+    "JARVIS_DESKTOP_SCREENSHOT_TEMP_DIR",
+    "JARVIS_DESKTOP_VISION_ENABLED",
     "OPEN_STT_API_KEY",
     "OPEN_STT_BASE_URL",
     "OPEN_STT_MODEL",
@@ -91,7 +99,15 @@ def test_custom_open_compatible_settings(monkeypatch, tmp_path: Path) -> None:
     assert settings.desktop_snapshot_max_text_length == 200
     assert settings.desktop_snapshot_ttl_seconds == 30
     assert settings.desktop_operation_timeout_seconds == 10
+    assert settings.desktop_observation_timeout_seconds == 10
+    assert settings.desktop_focus_timeout_seconds == 10
+    assert settings.desktop_action_timeout_seconds == 10
     assert settings.desktop_input_max_text_length == 4000
+    assert settings.desktop_screenshot_max_width == 1920
+    assert settings.desktop_screenshot_max_height == 1080
+    assert settings.desktop_screenshot_ttl_seconds == 60
+    assert settings.desktop_screenshot_temp_dir.name == "jarvis-screenshots"
+    assert not settings.desktop_vision_enabled
     assert settings.voice_settings.sample_rate == 16000
     assert settings.wake_settings.model == "hey_jarvis"
 
@@ -170,7 +186,15 @@ def test_desktop_control_limits_are_configurable(monkeypatch, tmp_path: Path) ->
     monkeypatch.setenv("JARVIS_DESKTOP_SNAPSHOT_MAX_TEXT_LENGTH", "120")
     monkeypatch.setenv("JARVIS_DESKTOP_SNAPSHOT_TTL_SECONDS", "12.5")
     monkeypatch.setenv("JARVIS_DESKTOP_OPERATION_TIMEOUT_SECONDS", "3.5")
+    monkeypatch.setenv("JARVIS_DESKTOP_OBSERVATION_TIMEOUT_SECONDS", "4.5")
+    monkeypatch.setenv("JARVIS_DESKTOP_FOCUS_TIMEOUT_SECONDS", "5.5")
+    monkeypatch.setenv("JARVIS_DESKTOP_ACTION_TIMEOUT_SECONDS", "6.5")
     monkeypatch.setenv("JARVIS_DESKTOP_INPUT_MAX_TEXT_LENGTH", "128")
+    monkeypatch.setenv("JARVIS_DESKTOP_SCREENSHOT_MAX_WIDTH", "1024")
+    monkeypatch.setenv("JARVIS_DESKTOP_SCREENSHOT_MAX_HEIGHT", "768")
+    monkeypatch.setenv("JARVIS_DESKTOP_SCREENSHOT_TTL_SECONDS", "30")
+    monkeypatch.setenv("JARVIS_DESKTOP_SCREENSHOT_TEMP_DIR", str(tmp_path / "shots"))
+    monkeypatch.setenv("JARVIS_DESKTOP_VISION_ENABLED", "true")
 
     settings = Settings.load(tmp_path)
 
@@ -180,7 +204,15 @@ def test_desktop_control_limits_are_configurable(monkeypatch, tmp_path: Path) ->
     assert settings.desktop_snapshot_max_text_length == 120
     assert settings.desktop_snapshot_ttl_seconds == 12.5
     assert settings.desktop_operation_timeout_seconds == 3.5
+    assert settings.desktop_observation_timeout_seconds == 4.5
+    assert settings.desktop_focus_timeout_seconds == 5.5
+    assert settings.desktop_action_timeout_seconds == 6.5
     assert settings.desktop_input_max_text_length == 128
+    assert settings.desktop_screenshot_max_width == 1024
+    assert settings.desktop_screenshot_max_height == 768
+    assert settings.desktop_screenshot_ttl_seconds == 30
+    assert settings.desktop_screenshot_temp_dir == tmp_path / "shots"
+    assert settings.desktop_vision_enabled
     assert "记事本" in settings.allowed_applications
 
 
@@ -192,7 +224,13 @@ def test_desktop_control_limits_are_configurable(monkeypatch, tmp_path: Path) ->
         ("JARVIS_DESKTOP_SNAPSHOT_MAX_TEXT_LENGTH", "19", "20 到 2000"),
         ("JARVIS_DESKTOP_SNAPSHOT_TTL_SECONDS", "301", "1 到 300"),
         ("JARVIS_DESKTOP_OPERATION_TIMEOUT_SECONDS", "0.5", "1 到 120"),
+        ("JARVIS_DESKTOP_OBSERVATION_TIMEOUT_SECONDS", "0.5", "1 到 120"),
+        ("JARVIS_DESKTOP_FOCUS_TIMEOUT_SECONDS", "0.5", "1 到 120"),
+        ("JARVIS_DESKTOP_ACTION_TIMEOUT_SECONDS", "0.5", "1 到 120"),
         ("JARVIS_DESKTOP_INPUT_MAX_TEXT_LENGTH", "0", "1 到 20000"),
+        ("JARVIS_DESKTOP_SCREENSHOT_MAX_WIDTH", "99", "100 到 7680"),
+        ("JARVIS_DESKTOP_SCREENSHOT_MAX_HEIGHT", "99", "100 到 4320"),
+        ("JARVIS_DESKTOP_SCREENSHOT_TTL_SECONDS", "4", "5 到 3600"),
         ("JARVIS_DESKTOP_CONTROL_ENABLED", "maybe", "true/false"),
     ],
 )
