@@ -2,7 +2,7 @@
 
 from jarvis.adapters.storage.obsidian import ObsidianNoteWriter
 from jarvis.adapters.storage.sqlite import SCHEMA_VERSION, SQLiteStore
-from jarvis.ports.storage import MemoryRecord
+from jarvis.ports.storage import MemoryRecord, SessionSummary
 
 MemoryStore = SQLiteStore
 
@@ -11,5 +11,6 @@ __all__ = [
     "MemoryStore",
     "ObsidianNoteWriter",
     "SCHEMA_VERSION",
+    "SessionSummary",
     "SQLiteStore",
 ]

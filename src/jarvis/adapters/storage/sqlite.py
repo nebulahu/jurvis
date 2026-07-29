@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from jarvis.adapters.storage.obsidian import ObsidianNoteWriter
-from jarvis.ports.storage import MemoryRecord
+from jarvis.application.memory_policy import SaveDecision, check_memory_save
+from jarvis.ports.storage import MemoryRecord, SessionSummary
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 5
 
 
 _SENSITIVE_AUDIT_PATTERNS = (
@@ -41,6 +42,29 @@ def _redact_jsonable(value: Any) -> Any:
     if isinstance(value, tuple):
         return [_redact_jsonable(item) for item in value]
     return value
+
+
+def _clamp_confidence(value: float) -> float:
+    return max(0.0, min(float(value), 1.0))
+
+
+def _clamp_importance(value: int) -> int:
+    return max(1, min(int(value), 5))
+
+
+def _clean_memory_type(value: str) -> str:
+    normalized = value.strip().lower()
+    return normalized if normalized in {"fact", "preference", "project", "task", "summary"} else "fact"
+
+
+def _clean_source(value: str) -> str:
+    cleaned = value.strip()[:40]
+    return cleaned or "user"
+
+
+def _fts_phrase(query: str) -> str:
+    escaped = query.replace('"', '""')
+    return f'"{escaped}"'
 
 
 class SQLiteStore:
@@ -77,7 +101,13 @@ class SQLiteStore:
                     content TEXT NOT NULL,
                     category TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    obsidian_path TEXT NOT NULL
+                    obsidian_path TEXT NOT NULL,
+                    memory_type TEXT NOT NULL DEFAULT 'fact',
+                    source TEXT NOT NULL DEFAULT 'user',
+                    confidence REAL NOT NULL DEFAULT 1.0,
+                    importance INTEGER NOT NULL DEFAULT 3,
+                    last_accessed_at TEXT NOT NULL DEFAULT '',
+                    access_count INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS conversations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -140,7 +170,82 @@ class SQLiteStore:
                             f"ALTER TABLE audit_log ADD COLUMN {column_name} {definition}"
                         )
                 version = 2
+            if version == 2:
+                existing_columns = {
+                    row["name"]
+                    for row in connection.execute("PRAGMA table_info(memories)")
+                }
+                for column_name, definition in {
+                    "memory_type": "TEXT NOT NULL DEFAULT 'fact'",
+                    "source": "TEXT NOT NULL DEFAULT 'user'",
+                    "confidence": "REAL NOT NULL DEFAULT 1.0",
+                    "importance": "INTEGER NOT NULL DEFAULT 3",
+                    "last_accessed_at": "TEXT NOT NULL DEFAULT ''",
+                    "access_count": "INTEGER NOT NULL DEFAULT 0",
+                }.items():
+                    if column_name not in existing_columns:
+                        connection.execute(
+                            f"ALTER TABLE memories ADD COLUMN {column_name} {definition}"
+                        )
+                version = 3
+            self._initialize_memory_fts(connection)
+            if version == 3:
+                connection.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS session_summaries (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        conversation_start TEXT NOT NULL,
+                        conversation_end TEXT NOT NULL,
+                        summary_text TEXT NOT NULL,
+                        source TEXT NOT NULL DEFAULT 'auto',
+                        created_at TEXT NOT NULL,
+                        confidence REAL NOT NULL DEFAULT 0.6,
+                        obsidian_path TEXT NOT NULL DEFAULT ''
+                    );
+                    """
+                )
+                version = 4
+            if version == 4:
+                existing_tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+                if "memory_revisions" not in existing_tables:
+                    connection.executescript(
+                        """
+                        CREATE TABLE IF NOT EXISTS memory_revisions (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            old_memory_id INTEGER NOT NULL,
+                            new_memory_id INTEGER NOT NULL DEFAULT 0,
+                            action TEXT NOT NULL,
+                            reason TEXT NOT NULL DEFAULT '',
+                            created_at TEXT NOT NULL
+                        );
+                        """
+                    )
+                version = 5
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+    def _initialize_memory_fts(self, connection: sqlite3.Connection) -> None:
+        try:
+            connection.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts
+                USING fts5(title, content, category, memory_type)
+                """
+            )
+            connection.execute("DELETE FROM memory_fts")
+            connection.execute(
+                """
+                INSERT INTO memory_fts(rowid, title, content, category, memory_type)
+                SELECT id, title, content, category, memory_type
+                FROM memories
+                """
+            )
+        except sqlite3.OperationalError:
+            return
 
     def add_model_request(
         self,
@@ -186,46 +291,189 @@ class SQLiteStore:
             ).fetchone()
         return dict(row) if row is not None else None
 
-    def remember(self, title: str, content: str, category: str = "偏好") -> MemoryRecord:
+    def remember(
+        self,
+        title: str,
+        content: str,
+        category: str = "偏好",
+        *,
+        memory_type: str = "fact",
+        source: str = "user",
+        confidence: float = 1.0,
+        importance: int = 3,
+    ) -> MemoryRecord:
+        policy = check_memory_save(
+            title=title,
+            content=content,
+            memory_type=memory_type,
+            confidence=confidence,
+        )
+        if policy.decision == SaveDecision.REJECT:
+            raise ValueError(policy.reason)
+        effective_confidence = policy.adjusted_confidence
+
         now = datetime.now().astimezone()
         created_at = now.isoformat(timespec="seconds")
+        cleaned_memory_type = _clean_memory_type(memory_type)
+        cleaned_source = _clean_source(source)
+        cleaned_confidence = _clamp_confidence(effective_confidence)
+        cleaned_importance = _clamp_importance(importance)
         path = self.note_writer.write(
             title=title,
             content=content,
             category=category,
             created_at=now,
+            memory_type=cleaned_memory_type,
+            source=cleaned_source,
+            confidence=cleaned_confidence,
+            importance=cleaned_importance,
         )
         try:
             with self._connect() as connection:
                 cursor = connection.execute(
                     """
-                    INSERT INTO memories (title, content, category, created_at, obsidian_path)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO memories
+                        (title, content, category, created_at, obsidian_path,
+                         memory_type, source, confidence, importance)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (title, content, category, created_at, str(path)),
+                    (
+                        title,
+                        content,
+                        category,
+                        created_at,
+                        str(path),
+                        cleaned_memory_type,
+                        cleaned_source,
+                        cleaned_confidence,
+                        cleaned_importance,
+                    ),
                 )
                 memory_id = int(cursor.lastrowid)
+                self._upsert_memory_fts(
+                    connection,
+                    memory_id,
+                    title,
+                    content,
+                    category,
+                    cleaned_memory_type,
+                )
         except Exception:
             path.unlink(missing_ok=True)
             raise
-        return MemoryRecord(memory_id, title, content, category, created_at, str(path))
+        return MemoryRecord(
+            memory_id,
+            title,
+            content,
+            category,
+            created_at,
+            str(path),
+            cleaned_memory_type,
+            cleaned_source,
+            cleaned_confidence,
+            cleaned_importance,
+            "",
+            0,
+        )
+
+    def _upsert_memory_fts(
+        self,
+        connection: sqlite3.Connection,
+        memory_id: int,
+        title: str,
+        content: str,
+        category: str,
+        memory_type: str,
+    ) -> None:
+        try:
+            connection.execute(
+                """
+                INSERT INTO memory_fts(rowid, title, content, category, memory_type)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (memory_id, title, content, category, memory_type),
+            )
+        except sqlite3.OperationalError:
+            return
 
     def search(self, query: str, limit: int = 5) -> list[MemoryRecord]:
         limit = max(1, min(limit, 20))
-        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        pattern = f"%{escaped}%"
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        stripped = query.strip()
+        if not stripped:
+            return self._recent_memories(limit)
+        rows: list[sqlite3.Row] = []
+        fts_query = _fts_phrase(stripped)
+        with self._connect() as connection:
+            try:
+                rows = connection.execute(
+                    """
+                    SELECT memories.id, memories.title, memories.content,
+                           memories.category, memories.created_at,
+                           memories.obsidian_path, memories.memory_type,
+                           memories.source, memories.confidence,
+                           memories.importance, memories.last_accessed_at,
+                           memories.access_count
+                    FROM memory_fts
+                    JOIN memories ON memories.id = memory_fts.rowid
+                    WHERE memory_fts MATCH ?
+                    ORDER BY bm25(memory_fts), memories.importance DESC, memories.id DESC
+                    LIMIT ?
+                    """,
+                    (fts_query, limit),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = []
+            if not rows:
+                rows = self._like_search(connection, stripped, limit)
+            if rows:
+                connection.execute(
+                    f"""
+                    UPDATE memories
+                    SET access_count = access_count + 1, last_accessed_at = ?
+                    WHERE id IN ({",".join("?" for _ in rows)})
+                    """,
+                    (now, *(int(row["id"]) for row in rows)),
+                )
+        return [MemoryRecord(**dict(row)) for row in rows]
+
+    def _recent_memories(self, limit: int) -> list[MemoryRecord]:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT id, title, content, category, created_at, obsidian_path
+                SELECT id, title, content, category, created_at, obsidian_path,
+                       memory_type, source, confidence, importance,
+                       last_accessed_at, access_count
                 FROM memories
-                WHERE title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\'
-                ORDER BY id DESC
+                ORDER BY importance DESC, id DESC
                 LIMIT ?
                 """,
-                (pattern, pattern, limit),
+                (limit,),
             ).fetchall()
         return [MemoryRecord(**dict(row)) for row in rows]
+
+    def _like_search(
+        self,
+        connection: sqlite3.Connection,
+        query: str,
+        limit: int,
+    ) -> list[sqlite3.Row]:
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
+        return connection.execute(
+            """
+            SELECT id, title, content, category, created_at, obsidian_path,
+                   memory_type, source, confidence, importance,
+                   last_accessed_at, access_count
+            FROM memories
+            WHERE title LIKE ? ESCAPE '\\'
+               OR content LIKE ? ESCAPE '\\'
+               OR category LIKE ? ESCAPE '\\'
+            ORDER BY importance DESC, id DESC
+            LIMIT ?
+            """,
+            (pattern, pattern, pattern, limit),
+        ).fetchall()
 
     def add_conversation(self, role: str, content: str) -> None:
         with self._connect() as connection:
@@ -330,3 +578,165 @@ class SQLiteStore:
             "ambiguous_rate": ambiguous / total,
             "user_rejection_rate": rejected / total,
         }
+
+    def save_summary(
+        self,
+        *,
+        conversation_start: str,
+        conversation_end: str,
+        summary_text: str,
+        source: str = "auto",
+        confidence: float = 0.6,
+    ) -> SessionSummary:
+        policy = check_memory_save(
+            title=f"会话摘要 {conversation_start[:10]}",
+            content=summary_text,
+            memory_type="summary",
+            confidence=confidence,
+        )
+        if policy.decision == SaveDecision.REJECT:
+            raise ValueError(policy.reason)
+        effective_confidence = policy.adjusted_confidence
+
+        now = datetime.now().astimezone()
+        created_at = now.isoformat(timespec="seconds")
+        clamped_confidence = _clamp_confidence(effective_confidence)
+        cleaned_source = _clean_source(source)
+        path = self.note_writer.write_summary(
+            summary_text=summary_text,
+            conversation_start=conversation_start,
+            conversation_end=conversation_end,
+            created_at=now,
+            source=cleaned_source,
+            confidence=clamped_confidence,
+        )
+        try:
+            with self._connect() as connection:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO session_summaries
+                        (conversation_start, conversation_end, summary_text,
+                         source, created_at, confidence, obsidian_path)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        conversation_start,
+                        conversation_end,
+                        summary_text,
+                        cleaned_source,
+                        created_at,
+                        clamped_confidence,
+                        str(path),
+                    ),
+                )
+                summary_id = int(cursor.lastrowid)
+                self._upsert_memory_fts(
+                    connection,
+                    -(summary_id + 1_000_000),
+                    f"会话摘要 {created_at[:10]}",
+                    summary_text,
+                    "summary",
+                    "summary",
+                )
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
+        return SessionSummary(
+            id=summary_id,
+            conversation_start=conversation_start,
+            conversation_end=conversation_end,
+            summary_text=summary_text,
+            source=cleaned_source,
+            created_at=created_at,
+            confidence=clamped_confidence,
+            obsidian_path=str(path),
+        )
+
+    def list_summaries(self, limit: int = 10) -> list[SessionSummary]:
+        limit = max(1, min(limit, 50))
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, conversation_start, conversation_end, summary_text,
+                       source, created_at, confidence, obsidian_path
+                FROM session_summaries
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [SessionSummary(**dict(row)) for row in rows]
+
+    def get_memory(self, memory_id: int) -> MemoryRecord | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, title, content, category, created_at, obsidian_path,
+                       memory_type, source, confidence, importance,
+                       last_accessed_at, access_count
+                FROM memories WHERE id = ?
+                """,
+                (memory_id,),
+            ).fetchone()
+        return MemoryRecord(**dict(row)) if row else None
+
+    def deprecate_memory(self, memory_id: int, reason: str) -> bool:
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT id FROM memories WHERE id = ?", (memory_id,)
+            ).fetchone()
+            if not existing:
+                return False
+            connection.execute(
+                "UPDATE memories SET importance = 1 WHERE id = ?", (memory_id,)
+            )
+            connection.execute(
+                """
+                INSERT INTO memory_revisions
+                    (old_memory_id, new_memory_id, action, reason, created_at)
+                VALUES (?, 0, 'deprecate', ?, ?)
+                """,
+                (memory_id, reason, now),
+            )
+        return True
+
+    def replace_memory(
+        self, old_id: int, new_id: int, reason: str = ""
+    ) -> bool:
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        with self._connect() as connection:
+            old_exists = connection.execute(
+                "SELECT id FROM memories WHERE id = ?", (old_id,)
+            ).fetchone()
+            new_exists = connection.execute(
+                "SELECT id FROM memories WHERE id = ?", (new_id,)
+            ).fetchone()
+            if not old_exists or not new_exists:
+                return False
+            connection.execute(
+                "UPDATE memories SET importance = 1 WHERE id = ?", (old_id,)
+            )
+            connection.execute(
+                """
+                INSERT INTO memory_revisions
+                    (old_memory_id, new_memory_id, action, reason, created_at)
+                VALUES (?, ?, 'replace', ?, ?)
+                """,
+                (old_id, new_id, reason, now),
+            )
+        return True
+
+    def list_revisions(self, limit: int = 20) -> list[dict[str, Any]]:
+        limit = max(1, min(limit, 50))
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, old_memory_id, new_memory_id, action, reason, created_at
+                FROM memory_revisions
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]

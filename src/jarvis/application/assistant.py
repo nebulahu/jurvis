@@ -12,6 +12,7 @@ from jarvis.application.models import (
     ToolResult,
     normalize_conversation_item,
 )
+from jarvis.application.summary import SummaryService
 from jarvis.ports.model import ModelProvider
 from jarvis.ports.storage import AssistantStore
 from jarvis.safety import PermissionPolicy
@@ -49,6 +50,7 @@ class JarvisAgent:
         max_tool_rounds: int = 6,
         max_history_items: int = 120,
         instructions: str = DEFAULT_INSTRUCTIONS,
+        summary_service: SummaryService | None = None,
     ) -> None:
         self.provider = provider
         self.tools = tools
@@ -58,6 +60,7 @@ class JarvisAgent:
         self.max_history_items = max_history_items
         self.instructions = instructions
         self.history: list[ConversationItem] = []
+        self.summary_service = summary_service
 
     def clear_history(self) -> None:
         self.history.clear()
@@ -68,6 +71,15 @@ class JarvisAgent:
     def _trim_history(self) -> None:
         if len(self.history) <= self.max_history_items:
             return
+        if self.summary_service is not None:
+            cutoff = len(self.history) - self.max_history_items
+            for index in range(cutoff, len(self.history)):
+                if isinstance(self.history[index], ChatMessage) and self.history[index].role == "user":
+                    to_summarize = self.history[:index]
+                    if to_summarize:
+                        self.summary_service.summarize(to_summarize)
+                    self.history = self.history[index:]
+                    return
         cutoff = len(self.history) - self.max_history_items
         for index in range(cutoff, len(self.history)):
             if isinstance(self.history[index], ChatMessage) and self.history[index].role == "user":
