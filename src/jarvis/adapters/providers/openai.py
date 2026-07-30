@@ -13,6 +13,7 @@ from jarvis.application.models import (
     TextContent,
     ToolCall,
     ToolResult,
+    _field,
     normalize_conversation_item,
 )
 from jarvis.ports.model import (
@@ -21,12 +22,6 @@ from jarvis.ports.model import (
     ProviderStatus,
     TextDeltaCallback,
 )
-
-def _field(item: Any, name: str, default: Any = None) -> Any:
-    if isinstance(item, dict):
-        return item.get(name, default)
-    return getattr(item, name, default)
-
 
 def _create_client(
     api_key: str,

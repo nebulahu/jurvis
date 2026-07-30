@@ -8,7 +8,7 @@ from jarvis.adapters.tools import (
 )
 from jarvis.adapters.desktop import WindowsApplicationLauncher
 from jarvis.application.tools import ToolRegistry
-from jarvis.memory import MemoryStore
+from jarvis.adapters.storage import SQLiteStore
 from jarvis.safety import PathGuard
 from jarvis.safety import RiskLevel
 from jarvis.application.tools import Tool
@@ -16,7 +16,7 @@ from jarvis.application.tools import Tool
 
 def test_tool_groups_can_be_registered_independently(tmp_path: Path) -> None:
     registry = ToolRegistry()
-    memory = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    memory = SQLiteStore(tmp_path / "jarvis.db", tmp_path / "vault")
 
     register_system_tools(registry)
     register_filesystem_tools(registry, PathGuard([tmp_path]))

@@ -102,7 +102,7 @@ def test_summary_service_calls_on_summary_callback(tmp_path: Path) -> None:
 
 
 def test_agent_trim_history_triggers_summary(tmp_path: Path) -> None:
-    from jarvis.agent import JarvisAgent
+    from jarvis.application.assistant import JarvisAgent
     from jarvis.application.tools import ToolRegistry, object_schema
     from jarvis.safety import PermissionPolicy, RiskLevel
 
@@ -147,7 +147,7 @@ description="无操作",
 
 
 def test_agent_trim_history_fallback_on_no_service(tmp_path: Path) -> None:
-    from jarvis.agent import JarvisAgent
+    from jarvis.application.assistant import JarvisAgent
     from jarvis.application.tools import ToolRegistry
     from jarvis.safety import PermissionPolicy
 

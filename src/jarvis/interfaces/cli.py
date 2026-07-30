@@ -32,10 +32,10 @@ def _show_status(agent: JarvisAgent, settings: Settings) -> None:
     print("正在检查模型服务……")
     status = agent.provider.health_check()
     print(f"服务：{'正常' if status.ok else '异常'}（{status.latency_ms} ms）")
-    print(f"模型：{settings.model}")
-    print(f"接口：{settings.api_mode}")
-    print(f"地址：{settings.base_url or 'SDK 默认地址'}")
-    print(f"超时/重试：{settings.request_timeout_seconds:g}s / {settings.max_retries} 次")
+    print(f"模型：{settings.model_settings.model}")
+    print(f"接口：{settings.model_settings.api_mode}")
+    print(f"地址：{settings.model_settings.base_url or 'SDK 默认地址'}")
+    print(f"超时/重试：{settings.model_settings.timeout_seconds:g}s / {settings.model_settings.max_retries} 次")
     print(f"上下文项：{len(agent.history)} / {settings.max_history_items}")
     print(f"详情：{status.message}")
     latest = agent.memory.latest_model_request()
@@ -137,7 +137,7 @@ def _run_voice_response(
     speaker,
 ) -> None:
     print("[思考中]", flush=True)
-    if not settings.tts_enabled:
+    if not settings.voice_settings.tts_enabled:
         _chat_with_stream(agent, settings.assistant_name, transcript)
         session.complete_turn()
         return
@@ -249,7 +249,7 @@ def _wake_mode(agent: JarvisAgent, settings: Settings) -> None:
     session = VoiceSession(voice_runtime.recorder, voice_runtime.transcriber)
 
     print(
-        f"\n已进入唤醒模式。说出 {settings.wake_model!r} 后直接讲话；"
+        f"\n已进入唤醒模式。说出 {settings.wake_settings.model!r} 后直接讲话；"
         "等待或录音时按 Esc 返回文字模式。"
     )
     while True:

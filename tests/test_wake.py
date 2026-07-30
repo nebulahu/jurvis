@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import jarvis.interfaces.cli as cli
 import pytest
-from jarvis.voice import AudioClip, VoiceError, VoiceState
-from jarvis.wake import (
+from jarvis.adapters.audio.voice import AudioClip, VoiceError, VoiceState
+from jarvis.adapters.audio.wake import (
     OpenWakeWordDetector,
     SoundDeviceFrameSource,
     WakeCancelled,
@@ -210,10 +210,9 @@ def test_wake_mode_runs_turn_then_escape_returns(monkeypatch, capsys) -> None:
 
     monkeypatch.setattr(cli, "_run_voice_response", fake_response)
     settings = SimpleNamespace(
-        wake_model="hey_jarvis",
         voice_settings=object(),
         model_settings=object(),
-        wake_settings=object(),
+        wake_settings=SimpleNamespace(model="hey_jarvis"),
     )
 
     cli._wake_mode(object(), settings)

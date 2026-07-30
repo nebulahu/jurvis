@@ -54,7 +54,7 @@ class ToolResult:
 ConversationItem: TypeAlias = ChatMessage | ToolCall | ToolResult
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class ModelResponse:
     output_items: list[ConversationItem | Any]
     output_text: str
