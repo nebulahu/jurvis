@@ -1,12 +1,24 @@
 import sqlite3
 from pathlib import Path
 
-from jarvis.memory import SCHEMA_VERSION, MemoryStore
+from jarvis.adapters.storage.obsidian import ObsidianNoteWriter
+from jarvis.adapters.storage.sqlite import SQLiteStore, SCHEMA_VERSION
+from jarvis.application.memory_service import MemoryService
+
+
+def _make_store(tmp_path: Path) -> SQLiteStore:
+    return SQLiteStore(tmp_path / "jarvis.db")
+
+
+def _make_service(tmp_path: Path) -> MemoryService:
+    db = SQLiteStore(tmp_path / "jarvis.db")
+    writer = ObsidianNoteWriter(tmp_path / "vault")
+    return MemoryService(db, writer)
 
 
 def test_memory_writes_sqlite_and_obsidian_utf8_without_bom(tmp_path: Path) -> None:
-    store = MemoryStore(tmp_path / "data" / "jarvis.db", tmp_path / "vault")
-    record = store.remember(
+    service = _make_service(tmp_path)
+    record = service.remember(
         "代码目录",
         r"项目位于 E:\Projects",
         "偏好",
@@ -23,7 +35,7 @@ def test_memory_writes_sqlite_and_obsidian_utf8_without_bom(tmp_path: Path) -> N
     assert "importance: 5" in text
     assert "tags:\n  - jarvis/memory" in text
     assert "> [!info] Jarvis 长期记忆" in text
-    result = store.search("Projects")[0]
+    result = service.search("Projects")[0]
     assert result.title == "代码目录"
     assert result.memory_type == "preference"
     assert result.importance == 5
@@ -31,7 +43,7 @@ def test_memory_writes_sqlite_and_obsidian_utf8_without_bom(tmp_path: Path) -> N
 
 
 def test_memory_search_escapes_like_wildcards(tmp_path: Path) -> None:
-    store = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    store = _make_store(tmp_path)
     store.remember("百分比", "完成度为 90%", "项目")
     store.remember("其他", "没有特殊字符", "项目")
 
@@ -40,7 +52,7 @@ def test_memory_search_escapes_like_wildcards(tmp_path: Path) -> None:
 
 
 def test_memory_search_uses_fts_and_tracks_access(tmp_path: Path) -> None:
-    store = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    store = _make_store(tmp_path)
     store.remember("低优先级", "Alpha Roadmap", "项目", importance=1)
     store.remember("高优先级", "Alpha Roadmap", "项目", importance=5)
 
@@ -57,7 +69,7 @@ def test_memory_search_uses_fts_and_tracks_access(tmp_path: Path) -> None:
 
 
 def test_model_request_metrics(tmp_path: Path) -> None:
-    store = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    store = _make_store(tmp_path)
     store.add_model_request(
         model="test-model",
         api_mode="chat_completions",
@@ -76,7 +88,7 @@ def test_model_request_metrics(tmp_path: Path) -> None:
 
 def test_sqlite_store_sets_schema_version(tmp_path: Path) -> None:
     db_path = tmp_path / "jarvis.db"
-    MemoryStore(db_path, tmp_path / "vault")
+    SQLiteStore(db_path)
 
     with sqlite3.connect(db_path) as connection:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
@@ -87,7 +99,7 @@ def test_sqlite_store_sets_schema_version(tmp_path: Path) -> None:
 def test_audit_log_stores_structured_metadata_and_redacts_sensitive_text(
     tmp_path: Path,
 ) -> None:
-    store = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    store = _make_store(tmp_path)
     result = (
         '{"status":"ambiguous","duration_ms":42,'
         '"evidence":{"verification":"action_timeout"},'
@@ -183,7 +195,7 @@ def test_sqlite_store_migrates_v1_audit_table(tmp_path: Path) -> None:
             """
         )
 
-    store = MemoryStore(db_path, tmp_path / "vault")
+    store = SQLiteStore(db_path)
     store.add_audit("tool", {}, False, "用户已拒绝", "操作未执行")
 
     with sqlite3.connect(db_path) as connection:
@@ -254,7 +266,7 @@ def test_sqlite_store_migrates_v2_memory_metadata(tmp_path: Path) -> None:
             """
         )
 
-    store = MemoryStore(db_path, tmp_path / "vault")
+    store = SQLiteStore(db_path)
     results = store.search("Legacy Alpha")
 
     with sqlite3.connect(db_path) as connection:
@@ -270,8 +282,8 @@ def test_sqlite_store_migrates_v2_memory_metadata(tmp_path: Path) -> None:
 
 
 def test_summary_save_and_list(tmp_path: Path) -> None:
-    store = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
-    summary = store.save_summary(
+    service = _make_service(tmp_path)
+    summary = service.save_summary(
         conversation_start="2026-07-29T10:00:00+08:00",
         conversation_end="2026-07-29T10:30:00+08:00",
         summary_text="用户讨论了 Jarvis 记忆系统的设计，决定先做摘要存储。",
@@ -282,14 +294,14 @@ def test_summary_save_and_list(tmp_path: Path) -> None:
     assert summary.conversation_start == "2026-07-29T10:00:00+08:00"
     assert summary.obsidian_path
 
-    results = store.list_summaries()
+    results = service.list_summaries()
     assert len(results) == 1
     assert results[0].summary_text == summary.summary_text
 
 
 def test_summary_obsidian_utf8_without_bom(tmp_path: Path) -> None:
-    store = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
-    summary = store.save_summary(
+    service = _make_service(tmp_path)
+    summary = service.save_summary(
         conversation_start="2026-07-29T10:00:00+08:00",
         conversation_end="2026-07-29T10:30:00+08:00",
         summary_text="测试摘要内容",
@@ -362,8 +374,8 @@ def test_summary_migration_from_v3(tmp_path: Path) -> None:
             """
         )
 
-    store = MemoryStore(db_path, tmp_path / "vault")
-    summary = store.save_summary(
+    service = _make_service(tmp_path)
+    summary = service.save_summary(
         conversation_start="2026-07-29T10:00:00+08:00",
         conversation_end="2026-07-29T10:30:00+08:00",
         summary_text="迁移后的摘要",

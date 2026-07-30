@@ -32,7 +32,7 @@ class SessionSummary:
     obsidian_path: str = ""
 
 
-class AssistantStore(Protocol):
+class ModelRequestPort(Protocol):
     def add_model_request(
         self,
         *,
@@ -47,11 +47,13 @@ class AssistantStore(Protocol):
 
     def latest_model_request(self) -> dict[str, Any] | None: ...
 
+
+class MemoryPort(Protocol):
     def remember(
         self,
         title: str,
         content: str,
-        category: str = "偏好",
+        category: str = "\u504f\u597d",
         *,
         memory_type: str = "fact",
         source: str = "user",
@@ -61,19 +63,13 @@ class AssistantStore(Protocol):
 
     def search(self, query: str, limit: int = 5) -> list[MemoryRecord]: ...
 
-    def add_conversation(self, role: str, content: str) -> None: ...
+    def get_memory(self, memory_id: int) -> MemoryRecord | None: ...
 
-    def add_audit(
-        self,
-        tool_name: str,
-        arguments: dict[str, Any],
-        allowed: bool,
-        reason: str,
-        result: str,
-        risk_level: int = 0,
-    ) -> None: ...
+    def deprecate_memory(self, memory_id: int, reason: str) -> bool: ...
 
-    def audit_metrics(self) -> dict[str, Any]: ...
+    def replace_memory(
+        self, old_id: int, new_id: int, reason: str = ""
+    ) -> bool: ...
 
     def save_summary(
         self,
@@ -87,10 +83,26 @@ class AssistantStore(Protocol):
 
     def list_summaries(self, limit: int = 10) -> list[SessionSummary]: ...
 
-    def deprecate_memory(self, memory_id: int, reason: str) -> bool: ...
 
-    def replace_memory(
-        self, old_id: int, new_id: int, reason: str = ""
-    ) -> bool: ...
+class ConversationPort(Protocol):
+    def add_conversation(self, role: str, content: str) -> None: ...
 
-    def get_memory(self, memory_id: int) -> MemoryRecord | None: ...
+
+class AuditPort(Protocol):
+    def add_audit(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        allowed: bool,
+        reason: str,
+        result: str,
+        risk_level: int = 0,
+    ) -> None: ...
+
+    def audit_metrics(self) -> dict[str, Any]: ...
+
+
+class AssistantStore(
+    ModelRequestPort, MemoryPort, ConversationPort, AuditPort, Protocol
+):
+    """Composite port for backward compatibility."""

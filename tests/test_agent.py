@@ -8,7 +8,7 @@ from jarvis.adapters.storage import SQLiteStore
 from jarvis.application.models import ChatMessage, ModelResponse, ToolCall, ToolResult
 from jarvis.safety import PathGuard, PermissionPolicy
 from jarvis.adapters.tools import build_default_registry
-from jarvis.application.tools import Tool, ToolRegistry, object_schema
+from jarvis.application.tools import CancellationManager, Tool, ToolRegistry, object_schema
 from jarvis.safety import RiskLevel
 
 
@@ -41,11 +41,24 @@ class FakeProvider:
         )
 
 
+def _make_agent(memory, provider, tools_or_registry, permissions, **kwargs):
+    return JarvisAgent(
+        provider,
+        tools_or_registry,
+        permissions,
+        memory=memory,
+        model_requests=memory,
+        conversation=memory,
+        audit=memory,
+        **kwargs,
+    )
+
+
 def test_agent_executes_tool_and_returns_output(tmp_path: Path) -> None:
-    memory = SQLiteStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    memory = SQLiteStore(tmp_path / "jarvis.db")
     provider = FakeProvider()
     tools = build_default_registry(memory, PathGuard([tmp_path]))
-    agent = JarvisAgent(provider, tools, PermissionPolicy(1), memory)
+    agent = _make_agent(memory, provider, tools, PermissionPolicy(1))
 
     answer = agent.chat("现在几点？")
 
@@ -61,7 +74,7 @@ def test_agent_executes_tool_and_returns_output(tmp_path: Path) -> None:
 
 
 def test_agent_stream_callback_clear_and_history_limit(tmp_path: Path) -> None:
-    memory = SQLiteStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    memory = SQLiteStore(tmp_path / "jarvis.db")
 
     class StreamingFakeProvider:
         model = "fake-model"
@@ -78,11 +91,11 @@ def test_agent_stream_callback_clear_and_history_limit(tmp_path: Path) -> None:
             )
 
     tools = build_default_registry(memory, PathGuard([tmp_path]))
-    agent = JarvisAgent(
+    agent = _make_agent(
+        memory,
         StreamingFakeProvider(),
         tools,
         PermissionPolicy(1),
-        memory,
         max_history_items=10,
     )
     agent.history = [ChatMessage(role="user", content=str(index)) for index in range(15)]
@@ -96,7 +109,7 @@ def test_agent_stream_callback_clear_and_history_limit(tmp_path: Path) -> None:
 
 
 def test_agent_uses_runtime_risk_and_sanitized_argument_preview(tmp_path: Path) -> None:
-    memory = SQLiteStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    memory = SQLiteStore(tmp_path / "jarvis.db")
     executed: list[str] = []
     confirmations: list[tuple[RiskLevel, dict[str, object]]] = []
 
@@ -144,11 +157,11 @@ def test_agent_uses_runtime_risk_and_sanitized_argument_preview(tmp_path: Path) 
             handler=lambda text: executed.append(text),
         )
     )
-    agent = JarvisAgent(
+    agent = _make_agent(
+        memory,
         DynamicRiskProvider(),
         registry,
         PermissionPolicy(1, confirm),
-        memory,
     )
 
     assert agent.chat("执行测试") == "操作未执行。"
@@ -172,7 +185,7 @@ def test_agent_uses_runtime_risk_and_sanitized_argument_preview(tmp_path: Path) 
 
 
 def test_agent_clears_and_requests_tool_cancellation(tmp_path: Path) -> None:
-    memory = SQLiteStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    memory = SQLiteStore(tmp_path / "jarvis.db")
     cancelled = []
     cleared = []
 
@@ -188,15 +201,17 @@ def test_agent_clears_and_requests_tool_cancellation(tmp_path: Path) -> None:
             )
 
     registry = ToolRegistry()
-    registry.register_cancellation(
+    cancellation = CancellationManager()
+    cancellation.register(
         lambda: cancelled.append(True),
         lambda: cleared.append(True),
     )
-    agent = JarvisAgent(
+    agent = _make_agent(
+        memory,
         NoToolProvider(),
         registry,
         PermissionPolicy(1),
-        memory,
+        cancellation=cancellation,
     )
 
     agent.cancel_pending_actions()

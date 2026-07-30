@@ -7,7 +7,7 @@ from typing import Any
 
 from jarvis.application.models import ChatMessage, ConversationItem, normalize_conversation_item
 from jarvis.ports.model import ModelProvider
-from jarvis.ports.storage import AssistantStore
+from jarvis.ports.storage import MemoryPort
 
 
 SUMMARY_INSTRUCTIONS = (
@@ -40,7 +40,7 @@ class SummaryService:
     def __init__(
         self,
         provider: ModelProvider,
-        memory: AssistantStore,
+        memory: MemoryPort,
         *,
         on_summary: Callable[[str], None] | None = None,
     ) -> None:

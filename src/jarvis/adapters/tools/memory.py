@@ -1,9 +1,9 @@
 from jarvis.application.tools import Tool, ToolRegistry, object_schema
-from jarvis.ports.storage import AssistantStore
+from jarvis.ports.storage import MemoryPort
 from jarvis.safety import RiskLevel
 
 
-def register_memory_tools(registry: ToolRegistry, memory: AssistantStore) -> None:
+def register_memory_tools(registry: ToolRegistry, memory: MemoryPort) -> None:
     def remember_memory(
         title: str,
         content: str,
@@ -76,13 +76,13 @@ def register_memory_tools(registry: ToolRegistry, memory: AssistantStore) -> Non
                 "id": item.id,
                 "title": item.title,
                 "content": item.content,
-                    "category": item.category,
-                    "memory_type": item.memory_type,
-                    "importance": item.importance,
-                    "confidence": item.confidence,
-                    "access_count": item.access_count,
-                    "created_at": item.created_at,
-                }
+                "category": item.category,
+                "memory_type": item.memory_type,
+                "importance": item.importance,
+                "confidence": item.confidence,
+                "access_count": item.access_count,
+                "created_at": item.created_at,
+            }
             for item in memory.search(query, limit)
         ]
 

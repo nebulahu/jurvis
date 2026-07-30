@@ -9,7 +9,7 @@ from jarvis.application.memory_policy import (
     contains_payment_info,
     contains_secret,
 )
-from jarvis.memory import MemoryStore
+from jarvis.adapters.storage.sqlite import SQLiteStore
 
 
 def test_contains_secret_detects_password() -> None:
@@ -86,7 +86,7 @@ def test_check_memory_save_allows_normal() -> None:
 
 
 def test_sqlite_remember_rejects_secret(tmp_path: Path) -> None:
-    store = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    store = SQLiteStore(tmp_path / "jarvis.db")
     try:
         store.remember("密码", "api_key=sk-1234567890", "项目")
         assert False, "should have raised"
@@ -95,7 +95,7 @@ def test_sqlite_remember_rejects_secret(tmp_path: Path) -> None:
 
 
 def test_sqlite_save_summary_rejects_secret(tmp_path: Path) -> None:
-    store = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    store = SQLiteStore(tmp_path / "jarvis.db")
     try:
         store.save_summary(
             conversation_start="2026-07-29T10:00:00+08:00",

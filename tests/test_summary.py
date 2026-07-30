@@ -6,7 +6,7 @@ from typing import Any
 
 from jarvis.application.models import ChatMessage, ModelResponse
 from jarvis.application.summary import SummaryService
-from jarvis.memory import MemoryStore
+from jarvis.adapters.storage.sqlite import SQLiteStore
 
 
 class _FakeSummaryProvider:
@@ -35,7 +35,7 @@ class _FailingProvider:
 
 
 def test_summary_service_generates_and_saves(tmp_path: Path) -> None:
-    memory = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    memory = SQLiteStore(tmp_path / "jarvis.db")
     provider = _FakeSummaryProvider()
     service = SummaryService(provider, memory)
 
@@ -57,7 +57,7 @@ def test_summary_service_generates_and_saves(tmp_path: Path) -> None:
 
 
 def test_summary_service_returns_none_on_empty_items(tmp_path: Path) -> None:
-    memory = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    memory = SQLiteStore(tmp_path / "jarvis.db")
     provider = _FakeSummaryProvider()
     service = SummaryService(provider, memory)
 
@@ -67,7 +67,7 @@ def test_summary_service_returns_none_on_empty_items(tmp_path: Path) -> None:
 
 
 def test_summary_service_returns_none_on_provider_failure(tmp_path: Path) -> None:
-    memory = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    memory = SQLiteStore(tmp_path / "jarvis.db")
     provider = _FailingProvider()
     service = SummaryService(provider, memory)
 
@@ -79,7 +79,7 @@ def test_summary_service_returns_none_on_provider_failure(tmp_path: Path) -> Non
 
 
 def test_summary_service_returns_none_on_empty_response(tmp_path: Path) -> None:
-    memory = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    memory = SQLiteStore(tmp_path / "jarvis.db")
     provider = _FakeSummaryProvider(response_text="")
     service = SummaryService(provider, memory)
 
@@ -90,7 +90,7 @@ def test_summary_service_returns_none_on_empty_response(tmp_path: Path) -> None:
 
 
 def test_summary_service_calls_on_summary_callback(tmp_path: Path) -> None:
-    memory = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    memory = SQLiteStore(tmp_path / "jarvis.db")
     provider = _FakeSummaryProvider()
     captured: list[str] = []
     service = SummaryService(provider, memory, on_summary=captured.append)
@@ -106,7 +106,7 @@ def test_agent_trim_history_triggers_summary(tmp_path: Path) -> None:
     from jarvis.application.tools import ToolRegistry, object_schema
     from jarvis.safety import PermissionPolicy, RiskLevel
 
-    memory = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    memory = SQLiteStore(tmp_path / "jarvis.db")
     provider = _FakeSummaryProvider()
     summary_service = SummaryService(provider, memory)
 
@@ -116,7 +116,7 @@ def test_agent_trim_history_triggers_summary(tmp_path: Path) -> None:
             "jarvis.application.tools", fromlist=["Tool"]
         ).Tool(
             name="noop",
-description="无操作",
+            description="无操作",
             parameters=object_schema({}, []),
             risk=RiskLevel.L1,
             handler=lambda: "ok",
@@ -127,7 +127,10 @@ description="无操作",
         provider,
         registry,
         PermissionPolicy(1),
-        memory,
+        memory=memory,
+        model_requests=memory,
+        conversation=memory,
+        audit=memory,
         max_history_items=4,
         summary_service=summary_service,
     )
@@ -151,14 +154,17 @@ def test_agent_trim_history_fallback_on_no_service(tmp_path: Path) -> None:
     from jarvis.application.tools import ToolRegistry
     from jarvis.safety import PermissionPolicy
 
-    memory = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    memory = SQLiteStore(tmp_path / "jarvis.db")
     provider = _FakeSummaryProvider()
 
     agent = JarvisAgent(
         provider,
         ToolRegistry(),
         PermissionPolicy(1),
-        memory,
+        memory=memory,
+        model_requests=memory,
+        conversation=memory,
+        audit=memory,
         max_history_items=4,
         summary_service=None,
     )

@@ -47,11 +47,33 @@ class Tool:
         return preview
 
 
+class CancellationManager:
+    """Manages UI cancellation callbacks for long-running operations."""
+
+    def __init__(self) -> None:
+        self._request_callbacks: list[Callable[[], None]] = []
+        self._clear_callbacks: list[Callable[[], None]] = []
+
+    def register(
+        self,
+        request_cancel: Callable[[], None],
+        clear_cancel: Callable[[], None],
+    ) -> None:
+        self._request_callbacks.append(request_cancel)
+        self._clear_callbacks.append(clear_cancel)
+
+    def request_cancellation(self) -> None:
+        for callback in tuple(self._request_callbacks):
+            callback()
+
+    def clear_cancellation(self) -> None:
+        for callback in tuple(self._clear_callbacks):
+            callback()
+
+
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
-        self._cancel_callbacks: list[Callable[[], None]] = []
-        self._clear_cancel_callbacks: list[Callable[[], None]] = []
 
     def register(self, tool: Tool) -> None:
         if tool.name in self._tools:
@@ -72,22 +94,6 @@ class ToolRegistry:
         if isinstance(result, str):
             return result
         return json.dumps(result, ensure_ascii=False, default=str)
-
-    def register_cancellation(
-        self,
-        request_cancel: Callable[[], None],
-        clear_cancel: Callable[[], None],
-    ) -> None:
-        self._cancel_callbacks.append(request_cancel)
-        self._clear_cancel_callbacks.append(clear_cancel)
-
-    def request_cancellation(self) -> None:
-        for callback in tuple(self._cancel_callbacks):
-            callback()
-
-    def clear_cancellation(self) -> None:
-        for callback in tuple(self._clear_cancel_callbacks):
-            callback()
 
 
 def object_schema(

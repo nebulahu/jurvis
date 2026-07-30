@@ -1,4 +1,4 @@
-from jarvis.application.tools import Tool, ToolRegistry, object_schema
+from jarvis.application.tools import CancellationManager, Tool, ToolRegistry, object_schema
 from jarvis.ports.desktop import (
     ApplicationLauncher,
     DesktopAction,
@@ -228,17 +228,18 @@ def register_desktop_tools(
     application_launcher: ApplicationLauncher,
     desktop_observer: DesktopObserver | None = None,
     desktop_controller: DesktopController | None = None,
+    cancellation: CancellationManager | None = None,
 ) -> None:
     registry.register(Tool(
         name="list_available_applications",
-        description="\u5217\u51fa\u5141\u8bb8\u7531\u52a9\u624b\u6253\u5f00\u4e14\u5f53\u524d\u53ef\u7528\u7684 Windows \u5e94\u7528\u53ca\u5176\u522b\u540d\u3002",
+        description="列出允许由助手打开且当前可用的 Windows 应用及其别名。",
         parameters=object_schema({}, []), risk=RiskLevel.L1,
         handler=application_launcher.list_applications,
     ))
     registry.register(Tool(
         name="open_application",
-        description="\u6253\u5f00\u5141\u8bb8\u5217\u8868\u4e2d\u7684 Windows \u5e94\u7528\u3002\u6267\u884c\u524d\u5fc5\u987b\u7531\u7528\u6237\u786e\u8ba4\u3002",
-        parameters=object_schema({"application": {"type": "string", "description": "\u5e94\u7528\u540d\u79f0\u6216\u5217\u8868\u4e2d\u7ed9\u51fa\u7684\u7cbe\u786e\u522b\u540d"}}, ["application"]),
+        description="打开允许列表中的 Windows 应用。执行前必须由用户确认。",
+        parameters=object_schema({"application": {"type": "string", "description": "应用名称或列表中给出的精确别名"}}, ["application"]),
         risk=RiskLevel.L2, handler=application_launcher.open_application,
     ))
     if desktop_observer is None:
@@ -257,24 +258,25 @@ def register_desktop_tools(
     def capture_window_screenshot(window_id: str) -> dict[str, object]:
         return desktop_observer.capture_window_screenshot(window_id).to_dict()
 
-    registry.register(Tool(name="list_windows", description="\u5217\u51fa\u5141\u8bb8\u5e94\u7528\u7684\u53ef\u89c1\u9876\u5c42\u7a97\u53e3\u53ca\u4f1a\u8bdd\u5185\u7a97\u53e3\u6807\u8bc6\u3002", parameters=object_schema({}, []), risk=RiskLevel.L1, handler=list_windows))
-    registry.register(Tool(name="get_active_window", description="\u8bfb\u53d6\u5f53\u524d\u524d\u53f0\u7a97\u53e3\uff1b\u524d\u53f0\u7a97\u53e3\u4e0d\u5728\u5141\u8bb8\u5217\u8868\u65f6\u8fd4\u56de\u7a7a\u3002", parameters=object_schema({}, []), risk=RiskLevel.L1, handler=get_active_window))
-    registry.register(Tool(name="inspect_window", description="\u8bfb\u53d6\u6307\u5b9a\u5141\u8bb8\u7a97\u53e3\u7684\u53d7\u9650 UI Automation \u63a7\u4ef6\u6811\u5feb\u7167\uff0c\u4e0d\u8bfb\u53d6\u63a7\u4ef6\u503c\u3002", parameters=object_schema({"window_id": {"type": "string", "description": "list_windows \u8fd4\u56de\u7684\u4f1a\u8bdd\u5185\u7a97\u53e3\u6807\u8bc6"}}, ["window_id"]), risk=RiskLevel.L1, handler=inspect_window))
-    registry.register(Tool(name="capture_window_screenshot", description="\u6355\u83b7\u6307\u5b9a\u5141\u8bb8\u7a97\u53e3\u7684\u672c\u5730\u4e34\u65f6\u622a\u56fe\uff0c\u53ea\u8fd4\u56de\u622a\u56fe\u6807\u8bc6\u3001\u8def\u5f84\u548c\u8fc7\u671f\u4fe1\u606f\uff0c\u4e0d\u4f1a\u53d1\u9001\u5230\u5916\u90e8\u670d\u52a1\u3002", parameters=object_schema({"window_id": {"type": "string", "description": "list_windows \u8fd4\u56de\u7684\u4f1a\u8bdd\u5185\u7a97\u53e3\u6807\u8bc6"}}, ["window_id"]), risk=RiskLevel.L1, handler=capture_window_screenshot))
+    registry.register(Tool(name="list_windows", description="列出允许应用的可见顶层窗口及会话内窗口标识。", parameters=object_schema({}, []), risk=RiskLevel.L1, handler=list_windows))
+    registry.register(Tool(name="get_active_window", description="读取当前前台窗口；前台窗口不在允许列表时返回空。", parameters=object_schema({}, []), risk=RiskLevel.L1, handler=get_active_window))
+    registry.register(Tool(name="inspect_window", description="读取指定允许窗口的受限 UI Automation 控件树快照，不读取控件值。", parameters=object_schema({"window_id": {"type": "string", "description": "list_windows 返回的会话内窗口标识"}}, ["window_id"]), risk=RiskLevel.L1, handler=inspect_window))
+    registry.register(Tool(name="capture_window_screenshot", description="捕获指定允许窗口的本地临时截图，只返回截图标识、路径和过期信息，不会发送到外部服务。", parameters=object_schema({"window_id": {"type": "string", "description": "list_windows 返回的会话内窗口标识"}}, ["window_id"]), risk=RiskLevel.L1, handler=capture_window_screenshot))
 
     if desktop_controller is None:
         return
 
-    request_cancel = getattr(desktop_controller, "request_cancel", None)
-    clear_cancel = getattr(desktop_controller, "clear_cancel", None)
-    if callable(request_cancel) and callable(clear_cancel):
-        registry.register_cancellation(request_cancel, clear_cancel)
+    if cancellation is not None:
+        request_cancel = getattr(desktop_controller, "request_cancel", None)
+        clear_cancel = getattr(desktop_controller, "clear_cancel", None)
+        if callable(request_cancel) and callable(clear_cancel):
+            cancellation.register(request_cancel, clear_cancel)
 
     risk_policy = DesktopActionRiskPolicy()
-    _register_action_tool(registry, desktop_controller, risk_policy, name="focus_window", description="\u7ecf\u786e\u8ba4\u540e\u5c06\u6307\u5b9a\u5141\u8bb8\u7a97\u53e3\u7f6e\u4e8e\u524d\u53f0\u3002", action_kind=DesktopActionKind.FOCUS_WINDOW, needs_element=False)
-    _register_action_tool(registry, desktop_controller, risk_policy, name="invoke_element", description="\u7ecf\u786e\u8ba4\u540e\u8c03\u7528\u672a\u8fc7\u671f\u5feb\u7167\u4e2d\u652f\u6301 Invoke \u7684\u8bed\u4e49\u63a7\u4ef6\u3002", action_kind=DesktopActionKind.INVOKE, needs_element=True)
-    _register_action_tool(registry, desktop_controller, risk_policy, name="set_element_value", description="\u7ecf\u786e\u8ba4\u540e\u4f7f\u7528 UI Automation ValuePattern \u5411\u666e\u901a\u975e\u654f\u611f\u63a7\u4ef6\u586b\u5199\u6587\u672c\u3002", action_kind=DesktopActionKind.SET_VALUE, needs_element=True, text_input=True)
-    _register_action_tool(registry, desktop_controller, risk_policy, name="send_shortcut", description="\u7ecf\u786e\u8ba4\u540e\u5411\u5f53\u524d\u524d\u53f0\u7684\u6307\u5b9a\u5141\u8bb8\u7a97\u53e3\u53d1\u9001\u6e05\u5355\u5185\u7f16\u8f91\u5feb\u6377\u952e\u3002", action_kind=DesktopActionKind.SEND_KEYS, needs_element=False, shortcut_input=True)
-    _register_action_tool(registry, desktop_controller, risk_policy, name="scroll_element", description="\u7ecf\u786e\u8ba4\u540e\u6eda\u52a8\u672a\u8fc7\u671f\u5feb\u7167\u4e2d\u652f\u6301 Scroll \u6216 ScrollItem \u7684\u8bed\u4e49\u63a7\u4ef6\u3002", action_kind=DesktopActionKind.SCROLL, needs_element=True, scroll_input=True)
-    _register_action_tool(registry, desktop_controller, risk_policy, name="click_coordinate", description="\u7ecf\u786e\u8ba4\u540e\u70b9\u51fb\u6709\u6548\u76ee\u6807\u7a97\u53e3\u622a\u56fe\u5185\u7684\u76f8\u5bf9\u5750\u6807\uff1b\u6267\u884c\u524d\u4f1a\u9a8c\u8bc1\u622a\u56fe\u672a\u8fc7\u671f\u3001\u7a97\u53e3\u672a\u79fb\u52a8\u4e14\u4ecd\u5904\u4e8e\u524d\u53f0\u3002", action_kind=DesktopActionKind.CLICK_COORDINATE, needs_element=False, coordinate_input=True)
-    _register_action_tool(registry, desktop_controller, risk_policy, name="select_element", description="\u7ecf\u786e\u8ba4\u540e\u9009\u62e9\u672a\u8fc7\u671f\u5feb\u7167\u4e2d\u652f\u6301 SelectionItem \u7684\u8bed\u4e49\u63a7\u4ef6\u3002", action_kind=DesktopActionKind.SELECT, needs_element=True)
+    _register_action_tool(registry, desktop_controller, risk_policy, name="focus_window", description="经确认后将指定允许窗口置于前台。", action_kind=DesktopActionKind.FOCUS_WINDOW, needs_element=False)
+    _register_action_tool(registry, desktop_controller, risk_policy, name="invoke_element", description="经确认后调用未过期快照中支持 Invoke 的语义控件。", action_kind=DesktopActionKind.INVOKE, needs_element=True)
+    _register_action_tool(registry, desktop_controller, risk_policy, name="set_element_value", description="经确认后使用 UI Automation ValuePattern 向普通非敏感控件填写文本。", action_kind=DesktopActionKind.SET_VALUE, needs_element=True, text_input=True)
+    _register_action_tool(registry, desktop_controller, risk_policy, name="send_shortcut", description="经确认后向当前前台的指定允许窗口发送清单内编辑快捷键。", action_kind=DesktopActionKind.SEND_KEYS, needs_element=False, shortcut_input=True)
+    _register_action_tool(registry, desktop_controller, risk_policy, name="scroll_element", description="经确认后滚动未过期快照中支持 Scroll 或 ScrollItem 的语义控件。", action_kind=DesktopActionKind.SCROLL, needs_element=True, scroll_input=True)
+    _register_action_tool(registry, desktop_controller, risk_policy, name="click_coordinate", description="经确认后点击有效目标窗口截图内的相对坐标；执行前会验证截图未过期、窗口未移动且仍处于前台。", action_kind=DesktopActionKind.CLICK_COORDINATE, needs_element=False, coordinate_input=True)
+    _register_action_tool(registry, desktop_controller, risk_policy, name="select_element", description="经确认后选择未过期快照中支持 SelectionItem 的语义控件。", action_kind=DesktopActionKind.SELECT, needs_element=True)
