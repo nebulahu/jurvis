@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from typing import Any
 
-from jarvis.provider import (
+from jarvis.adapters.providers.openai import (
     OpenAICompatibleChatProvider,
     OpenAICompatibleResponsesProvider,
     ProviderRequestError,

@@ -1,11 +1,11 @@
 import sqlite3
 from pathlib import Path
 
-from jarvis.memory import SCHEMA_VERSION, MemoryStore
+from jarvis.adapters.storage import SCHEMA_VERSION, SQLiteStore
 
 
 def test_memory_writes_sqlite_and_obsidian_utf8_without_bom(tmp_path: Path) -> None:
-    store = MemoryStore(tmp_path / "data" / "jarvis.db", tmp_path / "vault")
+    store = SQLiteStore(tmp_path / "data" / "jarvis.db", tmp_path / "vault")
     record = store.remember("代码目录", r"项目位于 E:\Projects", "偏好")
 
     note_path = Path(record.obsidian_path)
@@ -19,7 +19,7 @@ def test_memory_writes_sqlite_and_obsidian_utf8_without_bom(tmp_path: Path) -> N
 
 
 def test_memory_search_escapes_like_wildcards(tmp_path: Path) -> None:
-    store = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    store = SQLiteStore(tmp_path / "jarvis.db", tmp_path / "vault")
     store.remember("百分比", "完成度为 90%", "项目")
     store.remember("其他", "没有特殊字符", "项目")
 
@@ -28,7 +28,7 @@ def test_memory_search_escapes_like_wildcards(tmp_path: Path) -> None:
 
 
 def test_model_request_metrics(tmp_path: Path) -> None:
-    store = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    store = SQLiteStore(tmp_path / "jarvis.db", tmp_path / "vault")
     store.add_model_request(
         model="test-model",
         api_mode="chat_completions",
@@ -47,7 +47,7 @@ def test_model_request_metrics(tmp_path: Path) -> None:
 
 def test_sqlite_store_sets_schema_version(tmp_path: Path) -> None:
     db_path = tmp_path / "jarvis.db"
-    MemoryStore(db_path, tmp_path / "vault")
+    SQLiteStore(db_path, tmp_path / "vault")
 
     with sqlite3.connect(db_path) as connection:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
@@ -58,7 +58,7 @@ def test_sqlite_store_sets_schema_version(tmp_path: Path) -> None:
 def test_audit_log_stores_structured_metadata_and_redacts_sensitive_text(
     tmp_path: Path,
 ) -> None:
-    store = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    store = SQLiteStore(tmp_path / "jarvis.db", tmp_path / "vault")
     result = (
         '{"status":"ambiguous","duration_ms":42,'
         '"evidence":{"verification":"action_timeout"},'
@@ -154,7 +154,7 @@ def test_sqlite_store_migrates_v1_audit_table(tmp_path: Path) -> None:
             """
         )
 
-    store = MemoryStore(db_path, tmp_path / "vault")
+    store = SQLiteStore(db_path, tmp_path / "vault")
     store.add_audit("tool", {}, False, "用户已拒绝", "操作未执行")
 
     with sqlite3.connect(db_path) as connection:

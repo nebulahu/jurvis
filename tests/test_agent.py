@@ -3,11 +3,11 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from jarvis.agent import JarvisAgent
-from jarvis.memory import MemoryStore
+from jarvis.application.assistant import JarvisAgent
+from jarvis.adapters.storage import SQLiteStore
 from jarvis.application.models import ChatMessage, ModelResponse, ToolCall, ToolResult
 from jarvis.safety import PathGuard, PermissionPolicy
-from jarvis.tools import build_default_registry
+from jarvis.adapters.tools import build_default_registry
 from jarvis.application.tools import Tool, ToolRegistry, object_schema
 from jarvis.safety import RiskLevel
 
@@ -42,7 +42,7 @@ class FakeProvider:
 
 
 def test_agent_executes_tool_and_returns_output(tmp_path: Path) -> None:
-    memory = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    memory = SQLiteStore(tmp_path / "jarvis.db", tmp_path / "vault")
     provider = FakeProvider()
     tools = build_default_registry(memory, PathGuard([tmp_path]))
     agent = JarvisAgent(provider, tools, PermissionPolicy(1), memory)
@@ -61,7 +61,7 @@ def test_agent_executes_tool_and_returns_output(tmp_path: Path) -> None:
 
 
 def test_agent_stream_callback_clear_and_history_limit(tmp_path: Path) -> None:
-    memory = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    memory = SQLiteStore(tmp_path / "jarvis.db", tmp_path / "vault")
 
     class StreamingFakeProvider:
         model = "fake-model"
@@ -96,7 +96,7 @@ def test_agent_stream_callback_clear_and_history_limit(tmp_path: Path) -> None:
 
 
 def test_agent_uses_runtime_risk_and_sanitized_argument_preview(tmp_path: Path) -> None:
-    memory = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    memory = SQLiteStore(tmp_path / "jarvis.db", tmp_path / "vault")
     executed: list[str] = []
     confirmations: list[tuple[RiskLevel, dict[str, object]]] = []
 
@@ -172,7 +172,7 @@ def test_agent_uses_runtime_risk_and_sanitized_argument_preview(tmp_path: Path) 
 
 
 def test_agent_clears_and_requests_tool_cancellation(tmp_path: Path) -> None:
-    memory = MemoryStore(tmp_path / "jarvis.db", tmp_path / "vault")
+    memory = SQLiteStore(tmp_path / "jarvis.db", tmp_path / "vault")
     cancelled = []
     cleared = []
 

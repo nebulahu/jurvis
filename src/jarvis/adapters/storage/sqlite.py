@@ -43,6 +43,88 @@ def _redact_jsonable(value: Any) -> Any:
     return value
 
 
+def _migrate_schema(connection: sqlite3.Connection) -> None:
+    """Apply pending schema migrations and set the final version."""
+    version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+    if version > SCHEMA_VERSION:
+        raise RuntimeError(
+            f"\u6570\u636e\u5e93\u7248\u672c {version} \u9ad8\u4e8e\u7a0b\u5e8f\u652f\u6301\u7684\u7248\u672c {SCHEMA_VERSION}"
+        )
+    if version == 0:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                category TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                obsidian_path TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool_name TEXT NOT NULL,
+                arguments_json TEXT NOT NULL,
+                allowed INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                result TEXT NOT NULL,
+                risk_level INTEGER NOT NULL DEFAULT 0,
+                action TEXT NOT NULL DEFAULT '',
+                application TEXT NOT NULL DEFAULT '',
+                window_title TEXT NOT NULL DEFAULT '',
+                control_role TEXT NOT NULL DEFAULT '',
+                control_name TEXT NOT NULL DEFAULT '',
+                action_status TEXT NOT NULL DEFAULT '',
+                verification_status TEXT NOT NULL DEFAULT '',
+                duration_ms INTEGER NOT NULL DEFAULT 0,
+                result_summary TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS model_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model TEXT NOT NULL,
+                api_mode TEXT NOT NULL,
+                latency_ms INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                error TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        version = 1
+    if version == 1:
+        existing_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(audit_log)")
+        }
+        for column_name, definition in {
+            "risk_level": "INTEGER NOT NULL DEFAULT 0",
+            "action": "TEXT NOT NULL DEFAULT ''",
+            "application": "TEXT NOT NULL DEFAULT ''",
+            "window_title": "TEXT NOT NULL DEFAULT ''",
+            "control_role": "TEXT NOT NULL DEFAULT ''",
+            "control_name": "TEXT NOT NULL DEFAULT ''",
+            "action_status": "TEXT NOT NULL DEFAULT ''",
+            "verification_status": "TEXT NOT NULL DEFAULT ''",
+            "duration_ms": "INTEGER NOT NULL DEFAULT 0",
+            "result_summary": "TEXT NOT NULL DEFAULT ''",
+        }.items():
+            if column_name not in existing_columns:
+                connection.execute(
+                    f"ALTER TABLE audit_log ADD COLUMN {column_name} {definition}"
+                )
+        version = 2
+    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
 class SQLiteStore:
     def __init__(
         self,
@@ -63,84 +145,8 @@ class SQLiteStore:
 
     def _initialize(self) -> None:
         with self._connect() as connection:
-            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if version > SCHEMA_VERSION:
-                raise RuntimeError(
-                    f"数据库版本 {version} 高于程序支持的版本 {SCHEMA_VERSION}"
-                )
-            if version == 0:
-                connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS memories (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    title TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    category TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    obsidian_path TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS conversations (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS audit_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    tool_name TEXT NOT NULL,
-                    arguments_json TEXT NOT NULL,
-                    allowed INTEGER NOT NULL,
-                    reason TEXT NOT NULL,
-                    result TEXT NOT NULL,
-                    risk_level INTEGER NOT NULL DEFAULT 0,
-                    action TEXT NOT NULL DEFAULT '',
-                    application TEXT NOT NULL DEFAULT '',
-                    window_title TEXT NOT NULL DEFAULT '',
-                    control_role TEXT NOT NULL DEFAULT '',
-                    control_name TEXT NOT NULL DEFAULT '',
-                    action_status TEXT NOT NULL DEFAULT '',
-                    verification_status TEXT NOT NULL DEFAULT '',
-                    duration_ms INTEGER NOT NULL DEFAULT 0,
-                    result_summary TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS model_requests (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    model TEXT NOT NULL,
-                    api_mode TEXT NOT NULL,
-                    latency_ms INTEGER NOT NULL,
-                    status TEXT NOT NULL,
-                    input_tokens INTEGER NOT NULL,
-                    output_tokens INTEGER NOT NULL,
-                    error TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-                """
-                )
-                version = 1
-            if version == 1:
-                existing_columns = {
-                    row["name"]
-                    for row in connection.execute("PRAGMA table_info(audit_log)")
-                }
-                for column_name, definition in {
-                    "risk_level": "INTEGER NOT NULL DEFAULT 0",
-                    "action": "TEXT NOT NULL DEFAULT ''",
-                    "application": "TEXT NOT NULL DEFAULT ''",
-                    "window_title": "TEXT NOT NULL DEFAULT ''",
-                    "control_role": "TEXT NOT NULL DEFAULT ''",
-                    "control_name": "TEXT NOT NULL DEFAULT ''",
-                    "action_status": "TEXT NOT NULL DEFAULT ''",
-                    "verification_status": "TEXT NOT NULL DEFAULT ''",
-                    "duration_ms": "INTEGER NOT NULL DEFAULT 0",
-                    "result_summary": "TEXT NOT NULL DEFAULT ''",
-                }.items():
-                    if column_name not in existing_columns:
-                        connection.execute(
-                            f"ALTER TABLE audit_log ADD COLUMN {column_name} {definition}"
-                        )
-                version = 2
-            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            _migrate_schema(connection)
+
 
     def add_model_request(
         self,

@@ -10,7 +10,6 @@ from jarvis.application.models import (
     ConversationItem,
     ToolCall,
     ToolResult,
-    normalize_conversation_item,
 )
 from jarvis.ports.model import ModelProvider
 from jarvis.ports.storage import AssistantStore
@@ -31,12 +30,6 @@ DEFAULT_INSTRUCTIONS = """你是贾维斯，一个可靠、冷静而友好的中
 - 写入、覆盖或其他需要确认的操作被拒绝后，解释结果，不要绕过权限。
 - 获得足够结果后直接回答；最多使用必要的少量工具步骤。
 """
-
-
-def _field(item: Any, name: str, default: Any = None) -> Any:
-    if isinstance(item, dict):
-        return item.get(name, default)
-    return getattr(item, name, default)
 
 
 class JarvisAgent:
@@ -110,9 +103,8 @@ class JarvisAgent:
                 input_tokens=response.input_tokens,
                 output_tokens=response.output_tokens,
             )
-            output_items = [normalize_conversation_item(item) for item in response.output_items]
-            self.history.extend(output_items)
-            calls = [item for item in output_items if isinstance(item, ToolCall)]
+            self.history.extend(response.output_items)
+            calls = [item for item in response.output_items if isinstance(item, ToolCall)]
             if not calls:
                 answer = response.output_text.strip() or "我没有生成可显示的回答。"
                 self.memory.add_conversation("assistant", answer)
