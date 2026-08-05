@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 
-from jarvis.application.models import ChatMessage, ConversationItem
+from jarvis.ports.models import ChatMessage, ConversationItem
 from jarvis.ports.model import ModelProvider
 from jarvis.ports.storage import MemoryPort
 

@@ -4,7 +4,7 @@ import json
 from collections.abc import Callable
 from time import perf_counter
 
-from jarvis.application.models import (
+from jarvis.ports.models import (
     ChatMessage,
     ConversationItem,
     ToolCall,

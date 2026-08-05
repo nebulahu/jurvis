@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from jarvis.application.models import (
+from jarvis.ports.models import (
     ChatMessage,
     ImageContent,
     ModelResponse,

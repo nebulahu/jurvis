@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from jarvis.application.models import ConversationItem, ModelResponse
+from jarvis.ports.models import ConversationItem, ModelResponse
 
 
 TextDeltaCallback = Callable[[str], None]

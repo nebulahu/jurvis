@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from jarvis.application.models import ChatMessage, ModelResponse
+from jarvis.ports.models import ChatMessage, ModelResponse
 from jarvis.application.summary import SummaryService
 from jarvis.adapters.storage.sqlite import SQLiteStore
 

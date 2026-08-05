@@ -4,7 +4,7 @@ import base64
 from time import perf_counter
 from typing import Any
 
-from jarvis.application.models import (
+from jarvis.ports.models import (
     ChatMessage,
     ConversationItem,
     ImageContent,

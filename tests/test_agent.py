@@ -5,7 +5,7 @@ from typing import Any
 
 from jarvis.application.assistant import JarvisAgent
 from jarvis.adapters.storage import SQLiteStore
-from jarvis.application.models import ChatMessage, ModelResponse, ToolCall, ToolResult
+from jarvis.ports.models import ChatMessage, ModelResponse, ToolCall, ToolResult
 from jarvis.safety import PathGuard, PermissionPolicy
 from jarvis.adapters.tools import build_default_registry
 from jarvis.application.tools import CancellationManager, Tool, ToolRegistry, object_schema

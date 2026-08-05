@@ -6,7 +6,7 @@ from jarvis.adapters.providers.openai import (
     OpenAICompatibleResponsesProvider,
     ProviderRequestError,
 )
-from jarvis.application.models import ChatMessage, ImageContent, TextContent, ToolCall, ToolResult
+from jarvis.ports.models import ChatMessage, ImageContent, TextContent, ToolCall, ToolResult
 
 
 class FakeCompletions:
