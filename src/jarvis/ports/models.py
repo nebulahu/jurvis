@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal, TypeAlias, cast
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,17 +98,20 @@ def normalize_conversation_item(item: ConversationItem | Any) -> ConversationIte
                 continue
             image_path = _field(part, "path")
             if image_path:
+                detail_raw = str(_field(part, "detail", "auto"))
+                detail = cast(Literal["auto", "low", "high"], detail_raw if detail_raw in ("auto", "low", "high") else "auto")
                 parts.append(
                     ImageContent(
                         path=Path(str(image_path)),
                         media_type=str(_field(part, "media_type", "image/bmp")),
-                        detail=str(_field(part, "detail", "auto")),
+                        detail=detail,
                         authorized=bool(_field(part, "authorized", False)),
                         source_id=str(_field(part, "source_id", "")),
                     )
                 )
         if parts:
             content = tuple(parts)
+    valid_role = cast(Literal["user", "assistant"], role if role in ("user", "assistant") else "assistant")
     if isinstance(content, tuple):
-        return ChatMessage(role=role, content=content)
-    return ChatMessage(role=role, content=str(content or ""))
+        return ChatMessage(role=valid_role, content=content)
+    return ChatMessage(role=valid_role, content=str(content or ""))

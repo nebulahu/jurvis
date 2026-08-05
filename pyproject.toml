@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10"]
+dev = ["pytest>=8,<10", "mypy>=1.10,<2"]
 voice = [
   "sounddevice>=0.5,<1",
   "pyttsx3>=2.90,<3",
@@ -35,3 +35,36 @@ where = ["src"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "comtypes.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "sounddevice.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pyttsx3.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "openwakeword.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "webrtcvad.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "jarvis.adapters.desktop.*"
+# Windows-specific ctypes code with complex type inference
+disable_error_code = ["arg-type", "attr-defined", "assignment", "no-untyped-def", "dict-item"]

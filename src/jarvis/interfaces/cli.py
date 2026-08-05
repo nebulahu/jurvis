@@ -12,7 +12,7 @@ from jarvis.application.assistant import JarvisAgent
 from jarvis.application.voice_session import VoiceSession
 from jarvis.bootstrap import build_agent
 from jarvis.config import Settings
-from jarvis.ports.audio import VoiceError
+from jarvis.ports.audio import Speaker, VoiceError
 from jarvis.safety import RiskLevel
 
 
@@ -38,14 +38,14 @@ def _show_status(agent: JarvisAgent, settings: Settings) -> None:
     print(f"超时/重试：{settings.model_settings.timeout_seconds:g}s / {settings.model_settings.max_retries} 次")
     print(f"上下文项：{len(agent.history)} / {settings.max_history_items}")
     print(f"详情：{status.message}")
-    latest = agent.memory.latest_model_request()
+    latest = agent.model_requests.latest_model_request() if agent.model_requests else None
     if latest:
         print(
             "最近请求："
             f"{latest['status']}，{latest['latency_ms']} ms，"
             f"输入/输出 Token={latest['input_tokens']}/{latest['output_tokens']}"
         )
-    audit_metrics = agent.memory.audit_metrics()
+    audit_metrics = agent.audit.audit_metrics() if agent.audit else {"total": 0, "success_rate": 0.0, "timeout_rate": 0.0, "ambiguous_rate": 0.0, "user_rejection_rate": 0.0}
     if audit_metrics["total"]:
         print(
             "工具审计："
@@ -87,7 +87,7 @@ def _chat_with_stream(
         raise
 
 
-def _wait_for_recording_stop(limit_reached) -> bool:
+def _wait_for_recording_stop(limit_reached: threading.Event) -> bool:
     """Return True when recording stopped because its configured limit was reached."""
     if sys.platform != "win32":
         input()
@@ -134,7 +134,7 @@ def _run_voice_response(
     settings: Settings,
     session: VoiceSession,
     transcript: str,
-    speaker,
+    speaker: object,  # Speaker protocol - using object to avoid import cycle
 ) -> None:
     print("[思考中]", flush=True)
     if not settings.voice_settings.tts_enabled:
@@ -142,8 +142,9 @@ def _run_voice_response(
         session.complete_turn()
         return
 
+    from typing import cast
     player = StreamingSpeechPlayer(
-        speaker,
+        cast(Speaker, speaker),
         on_speaking=session.mark_speaking,
     )
     watcher_stop = threading.Event()
@@ -321,11 +322,14 @@ def main() -> None:
             print("当前会话上下文已清空，长期记忆不受影响。")
             continue
         if text.startswith("/mem "):
-            records = agent.memory.search(text[5:].strip())
-            if not records:
-                print("没有找到相关记忆。")
-            for record in records:
-                print(f"- [{record.category}] {record.title}: {record.content}")
+            if agent.memory is None:
+                print("记忆功能未启用。")
+            else:
+                records = agent.memory.search(text[5:].strip())
+                if not records:
+                    print("没有找到相关记忆。")
+                for record in records:
+                    print(f"- [{record.category}] {record.title}: {record.content}")
             continue
         if text == "/voice":
             _voice_mode(agent, settings)

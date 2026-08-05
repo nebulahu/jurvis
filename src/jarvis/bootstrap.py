@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from jarvis.adapters.desktop import build_desktop_adapters
 from jarvis.adapters.providers import build_provider
@@ -9,6 +10,9 @@ from jarvis.application.assistant import JarvisAgent
 from jarvis.ports.tools import CancellationManager
 from jarvis.config import Settings
 from jarvis.safety import ApprovalCallback, PathGuard, PermissionPolicy
+
+if TYPE_CHECKING:
+    from jarvis.application.memory_service import MemoryService
 
 
 def _build_memory_service(db_path: Path, memory_root: Path) -> "MemoryService":

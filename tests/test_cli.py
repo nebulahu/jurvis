@@ -30,6 +30,8 @@ def test_show_status_reports_audit_metrics(capsys) -> None:
         provider=FakeProvider(),
         history=[],
         memory=FakeMemory(),
+        model_requests=FakeMemory(),
+        audit=FakeMemory(),
     )
     settings = SimpleNamespace(
         model_settings=SimpleNamespace(

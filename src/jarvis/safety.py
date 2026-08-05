@@ -4,7 +4,6 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import cast
 
 from jarvis.ports.confirmation import ConfirmationPort
 from jarvis.ports.desktop import DesktopActionKind
@@ -57,8 +56,7 @@ class PermissionPolicy:
         if callable(self.approval_callback):
             approved = self.approval_callback(tool_name, risk, arguments)
         else:
-            confirmation = cast(ConfirmationPort, self.approval_callback)
-            approved = confirmation.confirm(tool_name, int(risk), arguments)
+            approved = self.approval_callback.confirm(tool_name, int(risk), arguments)
         return PermissionDecision(approved, "用户已确认" if approved else "用户已拒绝")
 
 

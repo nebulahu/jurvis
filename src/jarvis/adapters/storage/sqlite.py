@@ -331,7 +331,7 @@ class MemoryRepository:
                  cleaned_memory_type, cleaned_source, cleaned_confidence,
                  cleaned_importance),
             )
-            memory_id = int(cursor.lastrowid)
+            memory_id = cursor.lastrowid or 0
             self.upsert_memory_fts(
                 connection, memory_id, title, content, category, cleaned_memory_type,
             )
@@ -555,6 +555,7 @@ class AuditRepository:
         risk_level: int = 0,
     ) -> None:
         safe_arguments = redact_jsonable(arguments)
+        assert isinstance(safe_arguments, dict)
         safe_result = redact_sensitive_text(result)
         action_result: dict[str, Any] = {}
         try:
@@ -678,7 +679,7 @@ class SummaryRepository:
                 (conversation_start, conversation_end, summary_text,
                  cleaned_source, created_at, clamped_confidence, obsidian_path),
             )
-            summary_id = int(cursor.lastrowid)
+            summary_id = cursor.lastrowid or 0
             self._memory.upsert_memory_fts(
                 connection,
                 -(summary_id + 1_000_000),

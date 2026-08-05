@@ -521,7 +521,7 @@ class OpenAICompatibleChatProvider(_ProviderBase):
                     for call in tool_calls
                 ]
                 return ModelResponse(
-                    output_items=output_items,
+                    output_items=list(output_items),
                     output_text="",
                     model=response_model,
                     input_tokens=input_tokens,

@@ -18,9 +18,12 @@ from jarvis._env import (
 )
 
 try:
-    from dotenv import load_dotenv
+    from dotenv import load_dotenv as _load_dotenv
 except ImportError:  # pragma: no cover - dependency is installed in normal use
-    load_dotenv = None
+    _load_dotenv = None  # type: ignore[assignment]
+
+# Backward-compatible alias for test monkeypatching
+load_dotenv = _load_dotenv
 
 
 def _find_project_root(project_root: Path | None = None) -> Path:
