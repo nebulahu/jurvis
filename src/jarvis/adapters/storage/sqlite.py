@@ -759,55 +759,139 @@ class SQLiteStore:
 
     # --- ModelRequestPort ---
 
-    def add_model_request(self, **kwargs: Any) -> None:
-        self._model_requests.add_model_request(**kwargs)
+    def add_model_request(
+        self,
+        *,
+        model: str,
+        api_mode: str,
+        latency_ms: int,
+        status: str,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        error: str = "",
+    ) -> None:
+        self._model_requests.add_model_request(
+            model=model, api_mode=api_mode, latency_ms=latency_ms,
+            status=status, input_tokens=input_tokens,
+            output_tokens=output_tokens, error=error,
+        )
 
     def latest_model_request(self) -> dict[str, Any] | None:
         return self._model_requests.latest_model_request()
 
     # --- MemoryPort ---
 
-    def insert_memory(self, *args: Any, **kwargs: Any) -> MemoryRecord:
-        return self._memory.insert_memory(*args, **kwargs)
+    def insert_memory(
+        self,
+        title: str,
+        content: str,
+        category: str,
+        *,
+        memory_type: str = "fact",
+        source: str = "user",
+        confidence: float = 1.0,
+        importance: int = 3,
+        obsidian_path: str = "",
+    ) -> MemoryRecord:
+        return self._memory.insert_memory(
+            title=title, content=content, category=category,
+            memory_type=memory_type, source=source,
+            confidence=confidence, importance=importance,
+            obsidian_path=obsidian_path,
+        )
 
-    def remember(self, *args: Any, **kwargs: Any) -> MemoryRecord:
-        return self._memory.remember(*args, **kwargs)
+    def remember(
+        self,
+        title: str,
+        content: str,
+        category: str = "偏好",
+        *,
+        memory_type: str = "fact",
+        source: str = "user",
+        confidence: float = 1.0,
+        importance: int = 3,
+    ) -> MemoryRecord:
+        return self._memory.remember(
+            title=title, content=content, category=category,
+            memory_type=memory_type, source=source,
+            confidence=confidence, importance=importance,
+        )
 
-    def search(self, *args: Any, **kwargs: Any) -> list[MemoryRecord]:
-        return self._memory.search(*args, **kwargs)
+    def search(self, query: str, limit: int = 5) -> list[MemoryRecord]:
+        return self._memory.search(query, limit)
 
-    def get_memory(self, *args: Any, **kwargs: Any) -> MemoryRecord | None:
-        return self._memory.get_memory(*args, **kwargs)
+    def get_memory(self, memory_id: int) -> MemoryRecord | None:
+        return self._memory.get_memory(memory_id)
 
-    def deprecate_memory(self, *args: Any, **kwargs: Any) -> bool:
-        return self._memory.deprecate_memory(*args, **kwargs)
+    def deprecate_memory(self, memory_id: int, reason: str) -> bool:
+        return self._memory.deprecate_memory(memory_id, reason)
 
-    def replace_memory(self, *args: Any, **kwargs: Any) -> bool:
-        return self._memory.replace_memory(*args, **kwargs)
+    def replace_memory(
+        self, old_id: int, new_id: int, reason: str = ""
+    ) -> bool:
+        return self._memory.replace_memory(old_id, new_id, reason)
 
-    def list_revisions(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
-        return self._memory.list_revisions(*args, **kwargs)
+    def list_revisions(self, limit: int = 20) -> list[dict[str, Any]]:
+        return self._memory.list_revisions(limit)
 
     # --- ConversationPort ---
 
-    def add_conversation(self, *args: Any, **kwargs: Any) -> None:
-        self._conversation.add_conversation(*args, **kwargs)
+    def add_conversation(self, role: str, content: str) -> None:
+        self._conversation.add_conversation(role, content)
 
     # --- AuditPort ---
 
-    def add_audit(self, *args: Any, **kwargs: Any) -> None:
-        self._audit.add_audit(*args, **kwargs)
+    def add_audit(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        allowed: bool,
+        reason: str,
+        result: str,
+        risk_level: int = 0,
+    ) -> None:
+        self._audit.add_audit(tool_name, arguments, allowed, reason, result, risk_level)
 
-    def audit_metrics(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return self._audit.audit_metrics(*args, **kwargs)
+    def audit_metrics(self) -> dict[str, Any]:
+        return self._audit.audit_metrics()
 
     # --- Summary ---
 
-    def insert_summary(self, *args: Any, **kwargs: Any) -> SessionSummary:
-        return self._summary.insert_summary(*args, **kwargs)
+    def insert_summary(
+        self,
+        *,
+        conversation_start: str,
+        conversation_end: str,
+        summary_text: str,
+        source: str = "auto",
+        confidence: float = 0.6,
+        obsidian_path: str = "",
+    ) -> SessionSummary:
+        return self._summary.insert_summary(
+            conversation_start=conversation_start,
+            conversation_end=conversation_end,
+            summary_text=summary_text,
+            source=source,
+            confidence=confidence,
+            obsidian_path=obsidian_path,
+        )
 
-    def save_summary(self, *args: Any, **kwargs: Any) -> SessionSummary:
-        return self._summary.save_summary(*args, **kwargs)
+    def save_summary(
+        self,
+        *,
+        conversation_start: str,
+        conversation_end: str,
+        summary_text: str,
+        source: str = "auto",
+        confidence: float = 0.6,
+    ) -> SessionSummary:
+        return self._summary.save_summary(
+            conversation_start=conversation_start,
+            conversation_end=conversation_end,
+            summary_text=summary_text,
+            source=source,
+            confidence=confidence,
+        )
 
-    def list_summaries(self, *args: Any, **kwargs: Any) -> list[SessionSummary]:
-        return self._summary.list_summaries(*args, **kwargs)
+    def list_summaries(self, limit: int = 10) -> list[SessionSummary]:
+        return self._summary.list_summaries(limit)
