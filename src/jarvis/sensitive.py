@@ -1,22 +1,43 @@
 """Shared sensitive-content detection patterns.
 
-Used by safety policy and audit redaction to avoid duplicating regex definitions.
+Used by safety policy, memory policy, and audit redaction to avoid duplicating
+regex definitions across the codebase.
 """
 from __future__ import annotations
 
 import re
 
-# Patterns that detect sensitive payload content (passwords, API keys, card numbers, etc.)
-SENSITIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
+# --- Secret detection (passwords, API keys, tokens, JWT, etc.) ---
+
+SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # English key=value patterns
     re.compile(
-        r"(?i)\b(?:password|passwd|api[_ -]?key|access[_ -]?token|secret|otp|2fa)"
+        r"(?i)\b(?:password|passwd|api[_ -]?key|access[_ -]?token|secret[_ -]?key|"
+        r"auth[_ -]?token|bearer|otp|2fa[_ -]?code|private[_ -]?key|"
+        r"credit[_ -]?card|card[_ -]?number|cvv|ssn)"
         r"\s*[:=]\s*\S+"
     ),
-    re.compile(r"(?:密码|验证码|支付口令)\s*[:：=]\s*\S+"),
+    # Chinese patterns
+    re.compile(
+        r"(密码|口令|验证码|支付密码|银行卡号|身份证号|社保号|密钥|私钥)"
+        r"\s*[:：=]\s*\S+"
+    ),
+    # Long digit sequences (card numbers, IDs)
     re.compile(r"(?<!\d)\d{13,19}(?!\d)"),
+    # Bearer tokens and JWT
+    re.compile(r"(?i)bearer\s+[A-Za-z0-9\-_.]+"),
+    re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
 )
 
-# Patterns for audit log redaction (capture groups preserve structure while hiding value)
+# --- Payment / financial information detection ---
+
+PAYMENT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?:支付宝|微信支付|paypal|stripe|alipay|wechat\s*pay).*\d"),
+    re.compile(r"(?:付款|转账|汇款|打款).*\d{3,}"),
+)
+
+# --- Patterns for audit log redaction (capture groups hide value, preserve key) ---
+
 AUDIT_REDACT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         r"(?i)\b(password|passwd|api[_ -]?key|access[_ -]?token|secret|otp|2fa)"
@@ -38,9 +59,18 @@ _L4_TARGET_TERMS = (
 )
 
 
-def contains_sensitive_text(value: str) -> bool:
-    """Check if value contains sensitive patterns (passwords, card numbers, etc.)."""
-    return any(pattern.search(value) for pattern in SENSITIVE_PATTERNS)
+def contains_secret(text: str) -> bool:
+    """Check if text contains secrets, passwords, API keys, or auth tokens."""
+    return any(pattern.search(text) for pattern in SECRET_PATTERNS)
+
+
+def contains_payment_info(text: str) -> bool:
+    """Check if text contains payment or financial information."""
+    return any(pattern.search(text) for pattern in PAYMENT_PATTERNS)
+
+
+# Backward-compatible alias (used by safety.py and desktop adapter)
+contains_sensitive_text = contains_secret
 
 
 def redact_sensitive_text(value: str) -> str:
