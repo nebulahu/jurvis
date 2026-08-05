@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from time import perf_counter
-from typing import Any
 
 from jarvis.application.models import (
     ChatMessage,

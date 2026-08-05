@@ -1,8 +1,6 @@
 """Memory application service: orchestrates SQLite DB + Obsidian file writing."""
 from __future__ import annotations
 
-from pathlib import Path
-
 from jarvis.adapters.storage.obsidian import ObsidianNoteWriter
 from jarvis.adapters.storage.sqlite import SQLiteStore
 from jarvis.application.memory_policy import SaveDecision, check_memory_save

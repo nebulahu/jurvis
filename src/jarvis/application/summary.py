@@ -3,9 +3,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
 
-from jarvis.application.models import ChatMessage, ConversationItem, normalize_conversation_item
+from jarvis.application.models import ChatMessage, ConversationItem
 from jarvis.ports.model import ModelProvider
 from jarvis.ports.storage import MemoryPort
 

@@ -228,7 +228,6 @@ def _load_windows_top_level_windows() -> list[NativeWindowInfo]:
 
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
     user32.GetForegroundWindow.restype = wintypes.HWND
