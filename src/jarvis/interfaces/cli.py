@@ -12,8 +12,11 @@ from jarvis.application.assistant import JarvisAgent
 from jarvis.application.voice_session import VoiceSession
 from jarvis.bootstrap import build_agent
 from jarvis.config import Settings
+from jarvis.logging_config import get_logger, setup_logging
 from jarvis.ports.audio import Speaker, VoiceError
 from jarvis.safety import RiskLevel
+
+logger = get_logger(__name__)
 
 
 def _confirm(tool_name: str, risk: RiskLevel, arguments: dict[str, object]) -> bool:
@@ -289,13 +292,16 @@ def _wake_mode(agent: JarvisAgent, settings: Settings) -> None:
 
 
 def main() -> None:
+    setup_logging()
     try:
         settings = Settings.load()
         agent = build_agent(settings, _confirm)
     except Exception as exc:
+        logger.error("启动失败", error=str(exc))
         print(f"启动失败：{exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
+    logger.info("Jarvis 已启动", model=settings.model_settings.model)
     print(f"{settings.assistant_name} 已启动。输入 /help 查看命令，/quit 退出。")
     while True:
         try:
@@ -340,4 +346,5 @@ def main() -> None:
         try:
             _chat_with_stream(agent, settings.assistant_name, text)
         except Exception as exc:
+            logger.error("请求失败", error_type=type(exc).__name__, error=str(exc))
             print(f"\n请求失败：{type(exc).__name__}: {exc}", file=sys.stderr)
