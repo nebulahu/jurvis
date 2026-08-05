@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from jarvis.application.tools import Tool, ToolRegistry, object_schema
+from jarvis.ports.tools import Tool, ToolRegistry, object_schema
 from jarvis.safety import PathGuard, RiskLevel
 
 

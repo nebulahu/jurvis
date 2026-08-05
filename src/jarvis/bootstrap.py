@@ -5,7 +5,7 @@ from jarvis.adapters.providers import build_provider
 from jarvis.adapters.storage import build_memory_service
 from jarvis.adapters.tools import build_default_registry
 from jarvis.application.assistant import JarvisAgent
-from jarvis.application.tools import CancellationManager
+from jarvis.ports.tools import CancellationManager
 from jarvis.config import Settings
 from jarvis.safety import ApprovalCallback, PathGuard, PermissionPolicy
 

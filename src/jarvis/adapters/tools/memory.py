@@ -1,4 +1,4 @@
-from jarvis.application.tools import Tool, ToolRegistry, object_schema
+from jarvis.ports.tools import Tool, ToolRegistry, object_schema
 from jarvis.ports.storage import MemoryPort
 from jarvis.safety import RiskLevel
 

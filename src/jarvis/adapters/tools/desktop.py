@@ -1,4 +1,4 @@
-from jarvis.application.tools import CancellationManager, Tool, ToolRegistry, object_schema
+from jarvis.ports.tools import CancellationManager, Tool, ToolRegistry, object_schema
 from jarvis.ports.desktop import (
     ApplicationLauncher,
     DesktopAction,

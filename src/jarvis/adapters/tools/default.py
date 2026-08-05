@@ -2,7 +2,7 @@ from jarvis.adapters.tools.desktop import register_desktop_tools
 from jarvis.adapters.tools.filesystem import register_filesystem_tools
 from jarvis.adapters.tools.memory import register_memory_tools
 from jarvis.adapters.tools.system import register_system_tools
-from jarvis.application.tools import CancellationManager, ToolRegistry
+from jarvis.ports.tools import CancellationManager, ToolRegistry
 from jarvis.ports.storage import MemoryPort
 from jarvis.ports.desktop import ApplicationLauncher, DesktopController, DesktopObserver
 from jarvis.safety import PathGuard
