@@ -106,3 +106,59 @@ class AssistantStore(
     ModelRequestPort, MemoryPort, ConversationPort, AuditPort, Protocol
 ):
     """Composite port for backward compatibility."""
+
+
+class MemoryStorePort(AssistantStore, Protocol):
+    """Extended port for MemoryService that includes low-level insert methods."""
+
+    def insert_memory(
+        self,
+        title: str,
+        content: str,
+        category: str,
+        *,
+        memory_type: str = "fact",
+        source: str = "user",
+        confidence: float = 1.0,
+        importance: int = 3,
+        obsidian_path: str = "",
+    ) -> MemoryRecord: ...
+
+    def insert_summary(
+        self,
+        *,
+        conversation_start: str,
+        conversation_end: str,
+        summary_text: str,
+        source: str = "auto",
+        confidence: float = 0.6,
+        obsidian_path: str = "",
+    ) -> SessionSummary: ...
+
+
+class NoteWriterPort(Protocol):
+    """Port for writing memory notes to an external store (e.g. Obsidian)."""
+
+    def write(
+        self,
+        *,
+        title: str,
+        content: str,
+        category: str,
+        created_at: object,
+        memory_type: str = "fact",
+        source: str = "user",
+        confidence: float = 1.0,
+        importance: int = 3,
+    ) -> object: ...
+
+    def write_summary(
+        self,
+        *,
+        summary_text: str,
+        conversation_start: str,
+        conversation_end: str,
+        created_at: object,
+        source: str = "auto",
+        confidence: float = 0.6,
+    ) -> object: ...

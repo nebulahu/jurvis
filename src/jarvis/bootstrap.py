@@ -2,12 +2,22 @@ from __future__ import annotations
 
 from jarvis.adapters.desktop import build_desktop_adapters
 from jarvis.adapters.providers import build_provider
-from jarvis.adapters.storage import build_memory_service
 from jarvis.adapters.tools import build_default_registry
 from jarvis.application.assistant import JarvisAgent
 from jarvis.ports.tools import CancellationManager
 from jarvis.config import Settings
 from jarvis.safety import ApprovalCallback, PathGuard, PermissionPolicy
+
+
+def _build_memory_service(db_path, memory_root):
+    """Create a MemoryService with SQLite DB and Obsidian writer."""
+    from jarvis.adapters.storage.obsidian import ObsidianNoteWriter
+    from jarvis.adapters.storage.sqlite import SQLiteStore
+    from jarvis.application.memory_service import MemoryService
+
+    db = SQLiteStore(db_path)
+    writer = ObsidianNoteWriter(memory_root)
+    return MemoryService(db, writer)
 
 
 def build_agent(
@@ -21,7 +31,7 @@ def build_agent(
     if not model.api_key:
         raise RuntimeError("未配置 OPEN_API_KEY。请复制 .env.example 为 .env 并填写密钥。")
 
-    memory = build_memory_service(storage.db_path, storage.memory_root)
+    memory = _build_memory_service(storage.db_path, storage.memory_root)
     cancellation = CancellationManager()
     launcher, controller = build_desktop_adapters(settings.desktop_settings)
 

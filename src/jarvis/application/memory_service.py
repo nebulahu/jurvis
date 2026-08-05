@@ -1,24 +1,29 @@
-"""Memory application service: orchestrates SQLite DB + Obsidian file writing."""
+"""Memory application service: orchestrates DB + note writing via ports."""
 from __future__ import annotations
 
-from jarvis.adapters.storage.obsidian import ObsidianNoteWriter
-from jarvis.adapters.storage.sqlite import SQLiteStore
+from datetime import datetime
+
 from jarvis.application.memory_policy import SaveDecision, check_memory_save
-from jarvis.ports.storage import MemoryRecord, SessionSummary
+from jarvis.ports.storage import (
+    MemoryRecord,
+    MemoryStorePort,
+    NoteWriterPort,
+    SessionSummary,
+)
 
 
 class MemoryService:
-    """Coordinates DB persistence and Obsidian note writing.
+    """Coordinates DB persistence and note writing.
 
-    DB is the source of truth. Obsidian is a best-effort sync target.
-    If Obsidian write fails, the DB record is kept (no rollback).
-    If DB write fails after Obsidian succeeded, the note file is cleaned up.
+    DB is the source of truth. Note writer is a best-effort sync target.
+    If note write fails, the DB record is kept (no rollback).
+    If DB write fails after note succeeded, the note file is cleaned up.
     """
 
     def __init__(
         self,
-        db: SQLiteStore,
-        note_writer: ObsidianNoteWriter,
+        db: MemoryStorePort,
+        note_writer: NoteWriterPort,
     ) -> None:
         self._db = db
         self._writer = note_writer
@@ -73,8 +78,6 @@ class MemoryService:
         )
         if policy.decision == SaveDecision.REJECT:
             raise ValueError(policy.reason)
-
-        from datetime import datetime
 
         now = datetime.now().astimezone()
         path = self._writer.write(
@@ -134,8 +137,6 @@ class MemoryService:
         )
         if policy.decision == SaveDecision.REJECT:
             raise ValueError(policy.reason)
-
-        from datetime import datetime
 
         now = datetime.now().astimezone()
         path = self._writer.write_summary(
