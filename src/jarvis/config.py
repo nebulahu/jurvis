@@ -59,6 +59,8 @@ class ModelSettings:
     max_retries: int
     rate_limit_rpm: int = 0  # 0 = disabled
     rate_limit_burst: int = 10
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-sonnet-4-20250514"
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +144,10 @@ def _load_model_settings(api_key: str | None, base_url: str | None) -> ModelSett
         reasoning_effort=reasoning_effort,
         timeout_seconds=env_float_range("OPEN_TIMEOUT_SECONDS", 60.0, 1, 600),
         max_retries=env_int_range("OPEN_MAX_RETRIES", 2, 0, 10),
+        rate_limit_rpm=env_int_range("JARVIS_RATE_LIMIT_RPM", 0, 0, 10000),
+        rate_limit_burst=env_int_range("JARVIS_RATE_LIMIT_BURST", 10, 1, 100),
+        anthropic_api_key=env_optional_str("ANTHROPIC_API_KEY"),
+        anthropic_model=env_str("ANTHROPIC_MODEL", "claude-sonnet-4-20250514") or "claude-sonnet-4-20250514",
     )
 
 

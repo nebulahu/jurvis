@@ -50,16 +50,25 @@ def build_agent(
         cancellation,
     )
     permissions = PermissionPolicy(safety.auto_approve_level, approval_callback)
-    provider = build_provider(
-        api_key=model.api_key,
-        model=model.model,
-        api_mode=model.api_mode,
-        base_url=model.base_url,
-        reasoning_effort=model.reasoning_effort,
-        timeout_seconds=model.timeout_seconds,
-        max_retries=model.max_retries,
-        allow_image_input=settings.desktop_settings.vision_enabled,
-    )
+
+    # Use Anthropic provider if API key is configured
+    if model.anthropic_api_key:
+        from jarvis.adapters.providers.anthropic import build_anthropic_provider
+        provider = build_anthropic_provider(
+            api_key=model.anthropic_api_key,
+            model=model.anthropic_model,
+        )
+    else:
+        provider = build_provider(
+            api_key=model.api_key,
+            model=model.model,
+            api_mode=model.api_mode,
+            base_url=model.base_url,
+            reasoning_effort=model.reasoning_effort,
+            timeout_seconds=model.timeout_seconds,
+            max_retries=model.max_retries,
+            allow_image_input=settings.desktop_settings.vision_enabled,
+        )
     return JarvisAgent(
         provider=provider,
         tools=tools,
