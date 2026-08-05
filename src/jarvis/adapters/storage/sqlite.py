@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -9,38 +8,12 @@ from typing import Any
 
 from jarvis.application.memory_policy import SaveDecision, check_memory_save
 from jarvis.ports.storage import MemoryRecord, SessionSummary
+from jarvis.sensitive import redact_jsonable, redact_sensitive_text
 
 SCHEMA_VERSION = 5
 
 
-_SENSITIVE_AUDIT_PATTERNS = (
-    re.compile(
-        r"(?i)\b(password|passwd|api[_ -]?key|access[_ -]?token|secret|otp|2fa)"
-        r"(\s*[:=]\s*)[^\s,\"}]+"
-    ),
-    re.compile(r"(密码|验证码|支付口令)(\s*[:：]\s*)[^\s,\"}]+"),
-    re.compile(r"(?<!\d)\d{13,19}(?!\d)"),
-)
-
-
-def _redact_audit_text(value: str) -> str:
-    redacted = value
-    for pattern in _SENSITIVE_AUDIT_PATTERNS[:2]:
-        redacted = pattern.sub(lambda match: f"{match.group(1)}{match.group(2)}[已隐藏]", redacted)
-    redacted = _SENSITIVE_AUDIT_PATTERNS[2].sub("[数字敏感内容已隐藏]", redacted)
-    return redacted
-
-
-def _redact_jsonable(value: Any) -> Any:
-    if isinstance(value, str):
-        return _redact_audit_text(value)
-    if isinstance(value, dict):
-        return {str(key): _redact_jsonable(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_redact_jsonable(item) for item in value]
-    if isinstance(value, tuple):
-        return [_redact_jsonable(item) for item in value]
-    return value
+# ── helpers ──────────────────────────────────────────────────────────────────
 
 
 def _clamp_confidence(value: float) -> float:
@@ -66,21 +39,28 @@ def _fts_phrase(query: str) -> str:
     return f'"{escaped}"'
 
 
-class SQLiteStore:
-    """Pure DB adapter. No file system side effects."""
+def _now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+# ── connection provider ──────────────────────────────────────────────────────
+
+
+class _ConnectionProvider:
+    """Shared database connection factory and schema migration."""
 
     def __init__(self, db_path: Path) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
-    def _connect(self) -> sqlite3.Connection:
+    def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path)
         connection.row_factory = sqlite3.Row
         return connection
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
+        with self.connect() as connection:
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
             if version > SCHEMA_VERSION:
                 raise RuntimeError(
@@ -241,7 +221,15 @@ class SQLiteStore:
         except sqlite3.OperationalError:
             return
 
-    # --- ModelRequestPort ---
+
+# ── repository: model requests ───────────────────────────────────────────────
+
+
+class ModelRequestRepository:
+    """Implements ModelRequestPort against SQLite."""
+
+    def __init__(self, provider: _ConnectionProvider) -> None:
+        self._p = provider
 
     def add_model_request(
         self,
@@ -254,7 +242,7 @@ class SQLiteStore:
         output_tokens: int = 0,
         error: str = "",
     ) -> None:
-        with self._connect() as connection:
+        with self._p.connect() as connection:
             connection.execute(
                 """
                 INSERT INTO model_requests
@@ -262,20 +250,12 @@ class SQLiteStore:
                      output_tokens, error, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    model,
-                    api_mode,
-                    latency_ms,
-                    status,
-                    input_tokens,
-                    output_tokens,
-                    error[:2000],
-                    datetime.now().astimezone().isoformat(timespec="seconds"),
-                ),
+                (model, api_mode, latency_ms, status, input_tokens,
+                 output_tokens, error[:2000], _now_iso()),
             )
 
     def latest_model_request(self) -> dict[str, Any] | None:
-        with self._connect() as connection:
+        with self._p.connect() as connection:
             row = connection.execute(
                 """
                 SELECT model, api_mode, latency_ms, status, input_tokens,
@@ -287,7 +267,39 @@ class SQLiteStore:
             ).fetchone()
         return dict(row) if row is not None else None
 
-    # --- MemoryPort (DB-only, no file side effects) ---
+
+# ── repository: memory ───────────────────────────────────────────────────────
+
+
+class MemoryRepository:
+    """Implements MemoryPort against SQLite (DB-only, no file side effects)."""
+
+    def __init__(self, provider: _ConnectionProvider) -> None:
+        self._p = provider
+
+    # --- FTS helpers (shared with summary) ---
+
+    def upsert_memory_fts(
+        self,
+        connection: sqlite3.Connection,
+        memory_id: int,
+        title: str,
+        content: str,
+        category: str,
+        memory_type: str,
+    ) -> None:
+        try:
+            connection.execute(
+                """
+                INSERT INTO memory_fts(rowid, title, content, category, memory_type)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (memory_id, title, content, category, memory_type),
+            )
+        except sqlite3.OperationalError:
+            return
+
+    # --- CRUD ---
 
     def insert_memory(
         self,
@@ -307,7 +319,7 @@ class SQLiteStore:
         cleaned_source = _clean_source(source)
         cleaned_confidence = _clamp_confidence(confidence)
         cleaned_importance = _clamp_importance(importance)
-        with self._connect() as connection:
+        with self._p.connect() as connection:
             cursor = connection.execute(
                 """
                 INSERT INTO memories
@@ -315,20 +327,12 @@ class SQLiteStore:
                      memory_type, source, confidence, importance)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    title,
-                    content,
-                    category,
-                    created_at,
-                    obsidian_path,
-                    cleaned_memory_type,
-                    cleaned_source,
-                    cleaned_confidence,
-                    cleaned_importance,
-                ),
+                (title, content, category, created_at, obsidian_path,
+                 cleaned_memory_type, cleaned_source, cleaned_confidence,
+                 cleaned_importance),
             )
             memory_id = int(cursor.lastrowid)
-            self._upsert_memory_fts(
+            self.upsert_memory_fts(
                 connection, memory_id, title, content, category, cleaned_memory_type,
             )
         return MemoryRecord(
@@ -363,35 +367,15 @@ class SQLiteStore:
             importance=importance,
         )
 
-    def _upsert_memory_fts(
-        self,
-        connection: sqlite3.Connection,
-        memory_id: int,
-        title: str,
-        content: str,
-        category: str,
-        memory_type: str,
-    ) -> None:
-        try:
-            connection.execute(
-                """
-                INSERT INTO memory_fts(rowid, title, content, category, memory_type)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (memory_id, title, content, category, memory_type),
-            )
-        except sqlite3.OperationalError:
-            return
-
     def search(self, query: str, limit: int = 5) -> list[MemoryRecord]:
         limit = max(1, min(limit, 20))
-        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        now = _now_iso()
         stripped = query.strip()
         if not stripped:
             return self._recent_memories(limit)
         rows: list[sqlite3.Row] = []
         fts_query = _fts_phrase(stripped)
-        with self._connect() as connection:
+        with self._p.connect() as connection:
             try:
                 rows = connection.execute(
                     """
@@ -425,7 +409,7 @@ class SQLiteStore:
         return [MemoryRecord(**dict(row)) for row in rows]
 
     def _recent_memories(self, limit: int) -> list[MemoryRecord]:
-        with self._connect() as connection:
+        with self._p.connect() as connection:
             rows = connection.execute(
                 """
                 SELECT id, title, content, category, created_at, obsidian_path,
@@ -463,7 +447,7 @@ class SQLiteStore:
         ).fetchall()
 
     def get_memory(self, memory_id: int) -> MemoryRecord | None:
-        with self._connect() as connection:
+        with self._p.connect() as connection:
             row = connection.execute(
                 """
                 SELECT id, title, content, category, created_at, obsidian_path,
@@ -476,8 +460,7 @@ class SQLiteStore:
         return MemoryRecord(**dict(row)) if row else None
 
     def deprecate_memory(self, memory_id: int, reason: str) -> bool:
-        now = datetime.now().astimezone().isoformat(timespec="seconds")
-        with self._connect() as connection:
+        with self._p.connect() as connection:
             existing = connection.execute(
                 "SELECT id FROM memories WHERE id = ?", (memory_id,)
             ).fetchone()
@@ -492,15 +475,14 @@ class SQLiteStore:
                     (old_memory_id, new_memory_id, action, reason, created_at)
                 VALUES (?, 0, 'deprecate', ?, ?)
                 """,
-                (memory_id, reason, now),
+                (memory_id, reason, _now_iso()),
             )
         return True
 
     def replace_memory(
         self, old_id: int, new_id: int, reason: str = ""
     ) -> bool:
-        now = datetime.now().astimezone().isoformat(timespec="seconds")
-        with self._connect() as connection:
+        with self._p.connect() as connection:
             old_exists = connection.execute(
                 "SELECT id FROM memories WHERE id = ?", (old_id,)
             ).fetchone()
@@ -518,13 +500,13 @@ class SQLiteStore:
                     (old_memory_id, new_memory_id, action, reason, created_at)
                 VALUES (?, ?, 'replace', ?, ?)
                 """,
-                (old_id, new_id, reason, now),
+                (old_id, new_id, reason, _now_iso()),
             )
         return True
 
     def list_revisions(self, limit: int = 20) -> list[dict[str, Any]]:
         limit = max(1, min(limit, 50))
-        with self._connect() as connection:
+        with self._p.connect() as connection:
             rows = connection.execute(
                 """
                 SELECT id, old_memory_id, new_memory_id, action, reason, created_at
@@ -536,16 +518,32 @@ class SQLiteStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    # --- ConversationPort ---
+
+# ── repository: conversation ─────────────────────────────────────────────────
+
+
+class ConversationRepository:
+    """Implements ConversationPort against SQLite."""
+
+    def __init__(self, provider: _ConnectionProvider) -> None:
+        self._p = provider
 
     def add_conversation(self, role: str, content: str) -> None:
-        with self._connect() as connection:
+        with self._p.connect() as connection:
             connection.execute(
                 "INSERT INTO conversations (role, content, created_at) VALUES (?, ?, ?)",
-                (role, content, datetime.now().astimezone().isoformat(timespec="seconds")),
+                (role, content, _now_iso()),
             )
 
-    # --- AuditPort ---
+
+# ── repository: audit ────────────────────────────────────────────────────────
+
+
+class AuditRepository:
+    """Implements AuditPort against SQLite."""
+
+    def __init__(self, provider: _ConnectionProvider) -> None:
+        self._p = provider
 
     def add_audit(
         self,
@@ -556,8 +554,8 @@ class SQLiteStore:
         result: str,
         risk_level: int = 0,
     ) -> None:
-        safe_arguments = _redact_jsonable(arguments)
-        safe_result = _redact_audit_text(result)
+        safe_arguments = redact_jsonable(arguments)
+        safe_result = redact_sensitive_text(result)
         action_result: dict[str, Any] = {}
         try:
             parsed_result = json.loads(safe_result)
@@ -573,7 +571,7 @@ class SQLiteStore:
         duration_raw = action_result.get("duration_ms", 0)
         duration_ms = duration_raw if isinstance(duration_raw, int) else 0
         result_summary = safe_result[:1000]
-        with self._connect() as connection:
+        with self._p.connect() as connection:
             connection.execute(
                 """
                 INSERT INTO audit_log
@@ -599,12 +597,12 @@ class SQLiteStore:
                     verification_status,
                     duration_ms,
                     result_summary,
-                    datetime.now().astimezone().isoformat(timespec="seconds"),
+                    _now_iso(),
                 ),
             )
 
     def audit_metrics(self) -> dict[str, Any]:
-        with self._connect() as connection:
+        with self._p.connect() as connection:
             rows = connection.execute(
                 """
                 SELECT allowed, result, action_status, verification_status
@@ -644,7 +642,16 @@ class SQLiteStore:
             "user_rejection_rate": rejected / total,
         }
 
-    # --- Summary (DB-only) ---
+
+# ── repository: summary ──────────────────────────────────────────────────────
+
+
+class SummaryRepository:
+    """Implements summary persistence against SQLite."""
+
+    def __init__(self, provider: _ConnectionProvider, memory_repo: MemoryRepository) -> None:
+        self._p = provider
+        self._memory = memory_repo
 
     def insert_summary(
         self,
@@ -660,7 +667,7 @@ class SQLiteStore:
         created_at = now.isoformat(timespec="seconds")
         clamped_confidence = _clamp_confidence(confidence)
         cleaned_source = _clean_source(source)
-        with self._connect() as connection:
+        with self._p.connect() as connection:
             cursor = connection.execute(
                 """
                 INSERT INTO session_summaries
@@ -668,18 +675,11 @@ class SQLiteStore:
                      source, created_at, confidence, obsidian_path)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    conversation_start,
-                    conversation_end,
-                    summary_text,
-                    cleaned_source,
-                    created_at,
-                    clamped_confidence,
-                    obsidian_path,
-                ),
+                (conversation_start, conversation_end, summary_text,
+                 cleaned_source, created_at, clamped_confidence, obsidian_path),
             )
             summary_id = int(cursor.lastrowid)
-            self._upsert_memory_fts(
+            self._memory.upsert_memory_fts(
                 connection,
                 -(summary_id + 1_000_000),
                 f"会话摘要 {created_at[:10]}",
@@ -725,7 +725,7 @@ class SQLiteStore:
 
     def list_summaries(self, limit: int = 10) -> list[SessionSummary]:
         limit = max(1, min(limit, 50))
-        with self._connect() as connection:
+        with self._p.connect() as connection:
             rows = connection.execute(
                 """
                 SELECT id, conversation_start, conversation_end, summary_text,
@@ -737,3 +737,77 @@ class SQLiteStore:
                 (limit,),
             ).fetchall()
         return [SessionSummary(**dict(row)) for row in rows]
+
+
+# ── facade: SQLiteStore ──────────────────────────────────────────────────────
+
+
+class SQLiteStore:
+    """Pure DB adapter. No file system side effects.
+
+    Composes four focused repositories while preserving the original public API.
+    """
+
+    def __init__(self, db_path: Path) -> None:
+        self._provider = _ConnectionProvider(db_path)
+        self._model_requests = ModelRequestRepository(self._provider)
+        self._memory = MemoryRepository(self._provider)
+        self._conversation = ConversationRepository(self._provider)
+        self._audit = AuditRepository(self._provider)
+        self._summary = SummaryRepository(self._provider, self._memory)
+        self.db_path = self._provider.db_path
+
+    # --- ModelRequestPort ---
+
+    def add_model_request(self, **kwargs: Any) -> None:
+        self._model_requests.add_model_request(**kwargs)
+
+    def latest_model_request(self) -> dict[str, Any] | None:
+        return self._model_requests.latest_model_request()
+
+    # --- MemoryPort ---
+
+    def insert_memory(self, *args: Any, **kwargs: Any) -> MemoryRecord:
+        return self._memory.insert_memory(*args, **kwargs)
+
+    def remember(self, *args: Any, **kwargs: Any) -> MemoryRecord:
+        return self._memory.remember(*args, **kwargs)
+
+    def search(self, *args: Any, **kwargs: Any) -> list[MemoryRecord]:
+        return self._memory.search(*args, **kwargs)
+
+    def get_memory(self, *args: Any, **kwargs: Any) -> MemoryRecord | None:
+        return self._memory.get_memory(*args, **kwargs)
+
+    def deprecate_memory(self, *args: Any, **kwargs: Any) -> bool:
+        return self._memory.deprecate_memory(*args, **kwargs)
+
+    def replace_memory(self, *args: Any, **kwargs: Any) -> bool:
+        return self._memory.replace_memory(*args, **kwargs)
+
+    def list_revisions(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        return self._memory.list_revisions(*args, **kwargs)
+
+    # --- ConversationPort ---
+
+    def add_conversation(self, *args: Any, **kwargs: Any) -> None:
+        self._conversation.add_conversation(*args, **kwargs)
+
+    # --- AuditPort ---
+
+    def add_audit(self, *args: Any, **kwargs: Any) -> None:
+        self._audit.add_audit(*args, **kwargs)
+
+    def audit_metrics(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return self._audit.audit_metrics(*args, **kwargs)
+
+    # --- Summary ---
+
+    def insert_summary(self, *args: Any, **kwargs: Any) -> SessionSummary:
+        return self._summary.insert_summary(*args, **kwargs)
+
+    def save_summary(self, *args: Any, **kwargs: Any) -> SessionSummary:
+        return self._summary.save_summary(*args, **kwargs)
+
+    def list_summaries(self, *args: Any, **kwargs: Any) -> list[SessionSummary]:
+        return self._summary.list_summaries(*args, **kwargs)

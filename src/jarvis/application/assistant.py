@@ -67,23 +67,26 @@ class JarvisAgent:
     def cancel_pending_actions(self) -> None:
         self.cancellation.request_cancellation()
 
+    def _find_next_user_message(self, start: int) -> int | None:
+        """Find index of the next user message at or after *start*."""
+        for index in range(start, len(self.history)):
+            item = self.history[index]
+            if isinstance(item, ChatMessage) and item.role == "user":
+                return index
+        return None
+
     def _trim_history(self) -> None:
         if len(self.history) <= self.max_history_items:
             return
-        if self.summary_service is not None:
-            cutoff = len(self.history) - self.max_history_items
-            for index in range(cutoff, len(self.history)):
-                if isinstance(self.history[index], ChatMessage) and self.history[index].role == "user":
-                    to_summarize = self.history[:index]
-                    if to_summarize:
-                        self.summary_service.summarize(to_summarize)
-                    self.history = self.history[index:]
-                    return
         cutoff = len(self.history) - self.max_history_items
-        for index in range(cutoff, len(self.history)):
-            if isinstance(self.history[index], ChatMessage) and self.history[index].role == "user":
-                self.history = self.history[index:]
-                return
+        user_index = self._find_next_user_message(cutoff)
+        if user_index is None:
+            return
+        if self.summary_service is not None:
+            to_summarize = self.history[:user_index]
+            if to_summarize:
+                self.summary_service.summarize(to_summarize)
+        self.history = self.history[user_index:]
 
     def chat(
         self,

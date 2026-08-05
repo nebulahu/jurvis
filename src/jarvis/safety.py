@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import IntEnum
@@ -9,6 +8,15 @@ from typing import cast
 
 from jarvis.ports.confirmation import ConfirmationPort
 from jarvis.ports.desktop import DesktopActionKind
+from jarvis.sensitive import (
+    contains_sensitive_text,
+    contains_term,
+    get_l3_target_terms,
+    get_l4_target_terms,
+)
+
+# Backward-compatible alias for desktop adapter
+is_sensitive_desktop_text = contains_sensitive_text
 
 
 class RiskLevel(IntEnum):
@@ -82,70 +90,6 @@ class DesktopActionContext:
     keys: tuple[str, ...] = ()
 
 
-_L3_TARGET_TERMS = (
-    "发送",
-    "提交",
-    "发布",
-    "上传",
-    "删除",
-    "移除",
-    "确认订单",
-    "购买",
-    "send",
-    "submit",
-    "publish",
-    "upload",
-    "delete",
-    "remove",
-    "place order",
-    "purchase",
-)
-
-_L4_TARGET_TERMS = (
-    "密码",
-    "支付",
-    "付款",
-    "银行卡",
-    "信用卡",
-    "验证码",
-    "身份认证",
-    "安全设置",
-    "防火墙",
-    "password",
-    "passcode",
-    "payment",
-    "credit card",
-    "verification code",
-    "two-factor",
-    "security settings",
-    "firewall",
-)
-
-_SENSITIVE_PAYLOAD_PATTERNS = (
-    re.compile(
-        r"(?i)\b(?:password|passwd|api[_ -]?key|access[_ -]?token|secret|otp|2fa)"
-        r"\s*[:=]\s*\S+"
-    ),
-    re.compile(r"(?:密码|验证码|支付口令)\s*[:：=]\s*\S+"),
-    re.compile(r"(?<!\d)\d{13,19}(?!\d)"),
-)
-
-
-def _contains_term(value: str, terms: tuple[str, ...]) -> bool:
-    normalized = value.casefold()
-    for term in terms:
-        candidate = term.casefold()
-        if candidate.isascii():
-            pattern = rf"(?<![a-z0-9]){re.escape(candidate)}(?![a-z0-9])"
-            if re.search(pattern, normalized):
-                return True
-        elif candidate in normalized:
-            return True
-    return False
-
-
-def is_sensitive_desktop_text(value: str) -> bool:
-    return any(pattern.search(value) for pattern in _SENSITIVE_PAYLOAD_PATTERNS)
 
 
 class DesktopActionRiskPolicy:
@@ -160,8 +104,8 @@ class DesktopActionRiskPolicy:
         )
         if (
             context.target_is_sensitive
-            or _contains_term(target, _L4_TARGET_TERMS)
-            or is_sensitive_desktop_text(context.payload_text)
+            or contains_term(target, get_l4_target_terms())
+            or contains_sensitive_text(context.payload_text)
         ):
             return RiskLevel.L4
 
@@ -171,14 +115,14 @@ class DesktopActionRiskPolicy:
             DesktopActionKind.SEND_KEYS,
             DesktopActionKind.CLICK_COORDINATE,
         }
-        if high_impact_action and _contains_term(target, _L3_TARGET_TERMS):
+        if high_impact_action and contains_term(target, get_l3_target_terms()):
             return RiskLevel.L3
         return RiskLevel.L2
 
     def confirmation_preview(
         self, context: DesktopActionContext
     ) -> dict[str, object]:
-        if context.target_is_sensitive or is_sensitive_desktop_text(
+        if context.target_is_sensitive or contains_sensitive_text(
             context.payload_text
         ):
             text_summary = "[敏感内容已隐藏]"
