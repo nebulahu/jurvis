@@ -9,10 +9,10 @@ from typing import cast
 from jarvis.ports.confirmation import ConfirmationPort
 from jarvis.ports.desktop import DesktopActionKind
 from jarvis.sensitive import (
+    L3_TARGET_TERMS,
+    L4_TARGET_TERMS,
     contains_sensitive_text,
     contains_term,
-    get_l3_target_terms,
-    get_l4_target_terms,
 )
 
 # Backward-compatible alias for desktop adapter
@@ -104,7 +104,7 @@ class DesktopActionRiskPolicy:
         )
         if (
             context.target_is_sensitive
-            or contains_term(target, get_l4_target_terms())
+            or contains_term(target, L4_TARGET_TERMS)
             or contains_sensitive_text(context.payload_text)
         ):
             return RiskLevel.L4
@@ -115,7 +115,7 @@ class DesktopActionRiskPolicy:
             DesktopActionKind.SEND_KEYS,
             DesktopActionKind.CLICK_COORDINATE,
         }
-        if high_impact_action and contains_term(target, get_l3_target_terms()):
+        if high_impact_action and contains_term(target, L3_TARGET_TERMS):
             return RiskLevel.L3
         return RiskLevel.L2
 

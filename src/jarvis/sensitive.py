@@ -29,6 +29,19 @@ SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
 )
 
+# --- Desktop action sensitive detection (original 3-pattern semantics) ---
+# Used by is_sensitive_desktop_text for desktop risk classification.
+# Narrower than SECRET_PATTERNS: matches bare "secret", "支付口令", no JWT/CVV.
+
+DESKTOP_SENSITIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"(?i)\b(?:password|passwd|api[_ -]?key|access[_ -]?token|secret|otp|2fa)"
+        r"\s*[:=]\s*\S+"
+    ),
+    re.compile(r"(?:密码|验证码|支付口令)\s*[:：=]\s*\S+"),
+    re.compile(r"(?<!\d)\d{13,19}(?!\d)"),
+)
+
 # --- Payment / financial information detection ---
 
 PAYMENT_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -69,8 +82,13 @@ def contains_payment_info(text: str) -> bool:
     return any(pattern.search(text) for pattern in PAYMENT_PATTERNS)
 
 
-# Backward-compatible alias (used by safety.py and desktop adapter)
-contains_sensitive_text = contains_secret
+def contains_sensitive_text(text: str) -> bool:
+    """Check if text contains sensitive content for desktop risk classification.
+
+    Uses the original 3-pattern semantics: bare 'secret', '支付口令' match,
+    but JWT/CVV/SSN do not. Use contains_secret() for memory policy checks.
+    """
+    return any(pattern.search(text) for pattern in DESKTOP_SENSITIVE_PATTERNS)
 
 
 def redact_sensitive_text(value: str) -> str:
@@ -109,9 +127,6 @@ def contains_term(value: str, terms: tuple[str, ...]) -> bool:
     return False
 
 
-def get_l3_target_terms() -> tuple[str, ...]:
-    return _L3_TARGET_TERMS
-
-
-def get_l4_target_terms() -> tuple[str, ...]:
-    return _L4_TARGET_TERMS
+# Exported for safety.py (DesktopActionRiskPolicy)
+L3_TARGET_TERMS = _L3_TARGET_TERMS
+L4_TARGET_TERMS = _L4_TARGET_TERMS
