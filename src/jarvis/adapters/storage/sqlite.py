@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from jarvis.application.memory_policy import SaveDecision, check_memory_save
+from jarvis.ports.memory_policy import SaveDecision, check_memory_save
 from jarvis.ports.storage import MemoryRecord, SessionSummary
 from jarvis.sensitive import redact_jsonable, redact_sensitive_text
 

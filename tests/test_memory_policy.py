@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from jarvis.application.memory_policy import (
+from jarvis.ports.memory_policy import (
     SaveDecision,
     check_memory_save,
     contains_payment_info,

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from jarvis.application.memory_policy import SaveDecision, check_memory_save
+from jarvis.ports.memory_policy import SaveDecision, check_memory_save
 from jarvis.ports.storage import (
     MemoryRecord,
     MemoryStorePort,
