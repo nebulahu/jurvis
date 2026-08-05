@@ -57,6 +57,8 @@ class ModelSettings:
     reasoning_effort: str | None
     timeout_seconds: float
     max_retries: int
+    rate_limit_rpm: int = 0  # 0 = disabled
+    rate_limit_burst: int = 10
 
 
 @dataclass(frozen=True, slots=True)
