@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Protocol
 
 
@@ -145,12 +147,12 @@ class NoteWriterPort(Protocol):
         title: str,
         content: str,
         category: str,
-        created_at: object,
+        created_at: datetime,
         memory_type: str = "fact",
         source: str = "user",
         confidence: float = 1.0,
         importance: int = 3,
-    ) -> object: ...
+    ) -> Path: ...
 
     def write_summary(
         self,
@@ -158,7 +160,7 @@ class NoteWriterPort(Protocol):
         summary_text: str,
         conversation_start: str,
         conversation_end: str,
-        created_at: object,
+        created_at: datetime,
         source: str = "auto",
         confidence: float = 0.6,
-    ) -> object: ...
+    ) -> Path: ...

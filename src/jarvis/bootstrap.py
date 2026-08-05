@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from jarvis.adapters.desktop import build_desktop_adapters
 from jarvis.adapters.providers import build_provider
 from jarvis.adapters.tools import build_default_registry
@@ -9,7 +11,7 @@ from jarvis.config import Settings
 from jarvis.safety import ApprovalCallback, PathGuard, PermissionPolicy
 
 
-def _build_memory_service(db_path, memory_root):
+def _build_memory_service(db_path: Path, memory_root: Path) -> "MemoryService":
     """Create a MemoryService with SQLite DB and Obsidian writer."""
     from jarvis.adapters.storage.obsidian import ObsidianNoteWriter
     from jarvis.adapters.storage.sqlite import SQLiteStore
