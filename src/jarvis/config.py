@@ -118,6 +118,12 @@ class WakeSettings:
     vad_min_speech_ms: int
 
 
+@dataclass(frozen=True, slots=True)
+class HealthSettings:
+    enabled: bool = False
+    port: int = 8080
+
+
 def _load_model_settings(api_key: str | None, base_url: str | None) -> ModelSettings:
     model = env_str("OPEN_MODEL") or env_str("JARVIS_MODEL") or "gpt-5.6-sol"
     api_mode = env_choice("OPEN_API_MODE", "responses", {"responses", "chat_completions"})
@@ -246,6 +252,7 @@ class Settings:
     desktop_settings: DesktopSettings
     voice_settings: VoiceSettings
     wake_settings: WakeSettings
+    health_settings: HealthSettings
 
     @classmethod
     def load(cls, project_root: Path | None = None) -> "Settings":
@@ -262,6 +269,10 @@ class Settings:
         desktop = _load_desktop_settings()
         voice = _load_voice_settings(api_key, base_url)
         wake = _load_wake_settings()
+        health = HealthSettings(
+            enabled=env_bool("JARVIS_HEALTH_ENABLED", False),
+            port=env_int_range("JARVIS_HEALTH_PORT", 8080, 1024, 65535),
+        )
 
         return cls(
             assistant_name=env_str("JARVIS_NAME", "贾维斯") or "贾维斯",
@@ -272,4 +283,5 @@ class Settings:
             desktop_settings=desktop,
             voice_settings=voice,
             wake_settings=wake,
+            health_settings=health,
         )

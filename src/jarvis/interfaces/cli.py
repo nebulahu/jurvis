@@ -12,6 +12,7 @@ from jarvis.application.assistant import JarvisAgent
 from jarvis.application.voice_session import VoiceSession
 from jarvis.bootstrap import build_agent
 from jarvis.config import Settings
+from jarvis.interfaces.health import create_health_server
 from jarvis.logging_config import get_logger, setup_logging
 from jarvis.ports.audio import Speaker, VoiceError
 from jarvis.safety import RiskLevel
@@ -300,6 +301,19 @@ def main() -> None:
         logger.error("启动失败", error=str(exc))
         print(f"启动失败：{exc}", file=sys.stderr)
         raise SystemExit(1) from exc
+
+    # Start health check server if enabled
+    health_server = None
+    if settings.health_settings.enabled:
+        def health_check() -> dict[str, object]:
+            status = agent.provider.health_check()
+            return {"ok": status.ok, "model": status.model, "latency_ms": status.latency_ms}
+
+        health_server = create_health_server(
+            port=settings.health_settings.port,
+            health_check_fn=health_check,
+        )
+        health_server.start()
 
     logger.info("Jarvis 已启动", model=settings.model_settings.model)
     print(f"{settings.assistant_name} 已启动。输入 /help 查看命令，/quit 退出。")
