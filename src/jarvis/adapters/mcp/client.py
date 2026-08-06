@@ -36,13 +36,19 @@ class StdioMCPClient:
     def connect(self) -> None:
         """Launch the MCP server process."""
         try:
+            # Use shell=True on Windows for npx/node commands
+            import sys
+            use_shell = sys.platform == "win32"
+            cmd = [self._command, *self._args]
+
             self._process = subprocess.Popen(
-                [self._command, *self._args],
+                cmd if not use_shell else " ".join(cmd),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
+                shell=use_shell,
             )
             logger.info("MCP 服务器已启动", command=self._command, pid=self._process.pid)
 
