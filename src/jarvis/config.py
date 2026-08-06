@@ -126,6 +126,18 @@ class HealthSettings:
     port: int = 8080
 
 
+@dataclass(frozen=True, slots=True)
+class SkillSettings:
+    enabled: bool = False
+    skills_dir: str = "~/.jarvis/skills"
+
+
+@dataclass(frozen=True, slots=True)
+class MCPSettings:
+    enabled: bool = False
+    servers: tuple[str, ...] = ()  # list of "command arg1 arg2" strings
+
+
 def _load_model_settings(api_key: str | None, base_url: str | None) -> ModelSettings:
     model = env_str("OPEN_MODEL") or env_str("JARVIS_MODEL") or "gpt-5.6-sol"
     api_mode = env_choice("OPEN_API_MODE", "responses", {"responses", "chat_completions"})
@@ -259,6 +271,8 @@ class Settings:
     voice_settings: VoiceSettings
     wake_settings: WakeSettings
     health_settings: HealthSettings
+    skill_settings: SkillSettings
+    mcp_settings: MCPSettings
 
     @classmethod
     def load(cls, project_root: Path | None = None) -> "Settings":
@@ -279,6 +293,16 @@ class Settings:
             enabled=env_bool("JARVIS_HEALTH_ENABLED", False),
             port=env_int_range("JARVIS_HEALTH_PORT", 8080, 1024, 65535),
         )
+        skill = SkillSettings(
+            enabled=env_bool("JARVIS_SKILL_ENABLED", False),
+            skills_dir=env_str("JARVIS_SKILLS_DIR", "~/.jarvis/skills") or "~/.jarvis/skills",
+        )
+        mcp = MCPSettings(
+            enabled=env_bool("JARVIS_MCP_ENABLED", False),
+            servers=tuple(
+                s.strip() for s in env_str("JARVIS_MCP_SERVERS", "").split(";") if s.strip()
+            ),
+        )
 
         return cls(
             assistant_name=env_str("JARVIS_NAME", "贾维斯") or "贾维斯",
@@ -290,4 +314,6 @@ class Settings:
             voice_settings=voice,
             wake_settings=wake,
             health_settings=health,
+            skill_settings=skill,
+            mcp_settings=mcp,
         )

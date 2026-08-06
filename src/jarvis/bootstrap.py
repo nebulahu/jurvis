@@ -7,9 +7,12 @@ from jarvis.adapters.desktop import build_desktop_adapters
 from jarvis.adapters.providers import build_provider
 from jarvis.adapters.tools import build_default_registry
 from jarvis.application.assistant import JarvisAgent
+from jarvis.logging_config import get_logger
 from jarvis.ports.tools import CancellationManager
 from jarvis.config import Settings
-from jarvis.safety import ApprovalCallback, PathGuard, PermissionPolicy
+from jarvis.safety import ApprovalCallback, PathGuard, PermissionPolicy, RiskLevel
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from jarvis.application.memory_service import MemoryService
@@ -49,6 +52,56 @@ def build_agent(
         controller,
         cancellation,
     )
+
+    # Load skill plugins if enabled
+    if settings.skill_settings.enabled:
+        from pathlib import Path
+        from jarvis.adapters.skill import load_skills_from_dir
+        from jarvis.application.tools import Tool as AppTool
+
+        skills_dir = Path(settings.skill_settings.skills_dir).expanduser()
+        skills = load_skills_from_dir(skills_dir)
+        for skill in skills:
+            tools.register(AppTool(
+                name=skill.name,
+                description=skill.description,
+                parameters=skill.parameters,
+                risk=skill.risk,
+                handler=skill.handler,
+            ))
+
+    # Load MCP tools if enabled
+    if settings.mcp_settings.enabled:
+        from jarvis.adapters.mcp import create_mcp_client
+        from jarvis.application.tools import Tool as AppTool
+
+        for server_spec in settings.mcp_settings.servers:
+            parts = server_spec.split()
+            if not parts:
+                continue
+            command = parts[0]
+            args = parts[1:] if len(parts) > 1 else []
+            try:
+                client = create_mcp_client(command, args)
+                client.connect()
+                mcp_tools = client.list_tools()
+                for mcp_tool in mcp_tools:
+                    # Create a closure to capture the client and tool name
+                    def make_handler(c: object, n: str) -> object:
+                        def handler(**kwargs: object) -> str:
+                            return c.call_tool(n, kwargs)  # type: ignore
+                        return handler
+
+                    tools.register(AppTool(
+                        name=mcp_tool.name,
+                        description=mcp_tool.description,
+                        parameters=mcp_tool.parameters,
+                        risk=RiskLevel.L1,
+                        handler=make_handler(client, mcp_tool.name),
+                    ))
+            except Exception as exc:
+                logger.error("MCP 服务器连接失败", server=server_spec, error=str(exc))
+
     permissions = PermissionPolicy(safety.auto_approve_level, approval_callback)
 
     # Use Anthropic provider if API key is configured
