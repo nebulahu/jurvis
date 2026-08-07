@@ -91,6 +91,7 @@ class JarvisAgent:
         self,
         user_text: str,
         on_text_delta: Callable[[str], None] | None = None,
+        on_thinking_delta: Callable[[str], None] | None = None,
     ) -> str:
         self.cancellation.clear_cancellation()
         self._trim_history()
@@ -106,6 +107,7 @@ class JarvisAgent:
                     input_items=self.history,
                     tools=self.tools.schemas(),
                     on_text_delta=on_text_delta,
+                    on_thinking_delta=on_thinking_delta,
                 )
             except Exception as exc:
                 if self.model_requests is not None:

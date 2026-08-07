@@ -21,6 +21,7 @@ from jarvis.ports.model import (
     ProviderRequestError,
     ProviderStatus,
     TextDeltaCallback,
+    ThinkingDeltaCallback,
 )
 
 def _create_client(
@@ -249,6 +250,7 @@ class OpenAICompatibleResponsesProvider(_ProviderBase):
         input_items: list[ConversationItem],
         tools: list[dict[str, Any]],
         on_text_delta: TextDeltaCallback | None = None,
+        on_thinking_delta: ThinkingDeltaCallback | None = None,
     ) -> ModelResponse:
         request: dict[str, Any] = {
             "model": self.model,
@@ -274,6 +276,11 @@ class OpenAICompatibleResponsesProvider(_ProviderBase):
                         delta = str(_field(event, "delta", ""))
                         if delta:
                             on_text_delta(delta)
+                    elif event_type == "response.reasoning_summary_text.delta":
+                        # 思维链输出
+                        delta = str(_field(event, "delta", ""))
+                        if delta and on_thinking_delta is not None:
+                            on_thinking_delta(delta)
                     elif event_type == "response.completed":
                         response = _field(event, "response")
                 if response is None:
@@ -440,6 +447,7 @@ class OpenAICompatibleChatProvider(_ProviderBase):
         input_items: list[ConversationItem],
         tools: list[dict[str, Any]],
         on_text_delta: TextDeltaCallback | None = None,
+        on_thinking_delta: ThinkingDeltaCallback | None = None,
     ) -> ModelResponse:
         request = {
             "model": self.model,

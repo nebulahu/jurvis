@@ -66,9 +66,11 @@ def _chat_with_stream(
     assistant_name: str,
     text: str,
     on_text_delta: Callable[[str], None] | None = None,
-    timeout: float = 120.0,
+    on_thinking_delta: Callable[[str], None] | None = None,
+    timeout: float = 60.0,
 ) -> str:
     started = False
+    thinking_started = False
 
     def write_delta(delta: str) -> None:
         nonlocal started
@@ -79,24 +81,46 @@ def _chat_with_stream(
         if on_text_delta is not None:
             on_text_delta(delta)
 
+    def write_thinking(delta: str) -> None:
+        nonlocal thinking_started
+        if not thinking_started:
+            print("\n💭 思考中...", flush=True)
+            thinking_started = True
+        print(f"  {delta}", end="", flush=True)
+        if on_thinking_delta is not None:
+            on_thinking_delta(delta)
+
     # 使用线程包装，防止流式响应卡死
     result: list[str] = []
     error: list[BaseException] = []
+    cancelled = threading.Event()
 
     def _run() -> None:
         try:
-            result.append(agent.chat(text, on_text_delta=write_delta))
+            result.append(agent.chat(text, on_text_delta=write_delta, on_thinking_delta=write_thinking))
         except BaseException as exc:
-            error.append(exc)
+            if not cancelled.is_set():
+                error.append(exc)
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
-    thread.join(timeout=timeout)
+    try:
+        thread.join(timeout=timeout)
+    except KeyboardInterrupt:
+        cancelled.set()
+        print("\n已取消。")
+        return ""
 
     if thread.is_alive():
         # 超时未完成
+        cancelled.set()
         print(f"\n\n请求超时（{timeout:.0f}秒），请检查网络连接后重试。", file=sys.stderr)
         raise TimeoutError(f"请求超时（{timeout:.0f}秒）")
+
+    if not result and not error:
+        # 线程结束但没有结果
+        print("\n请求未返回结果，请重试。", file=sys.stderr)
+        return ""
 
     if error:
         if started:
@@ -104,6 +128,8 @@ def _chat_with_stream(
         raise error[0]
 
     answer = result[0] if result else ""
+    if thinking_started:
+        print()  # 思考结束后换行
     if started:
         print()
     else:
@@ -379,8 +405,6 @@ def main() -> None:
             continue
         try:
             _chat_with_stream(agent, settings.assistant_name, text)
-        except KeyboardInterrupt:
-            print("\n已取消。")
         except TimeoutError:
             logger.error("请求超时")
             print("\n请求超时，请检查网络连接后重试。", file=sys.stderr)

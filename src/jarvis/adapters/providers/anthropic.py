@@ -22,6 +22,7 @@ from jarvis.ports.model import (
     ProviderRequestError,
     ProviderStatus,
     TextDeltaCallback,
+    ThinkingDeltaCallback,
 )
 from jarvis.logging_config import get_logger
 
@@ -183,6 +184,7 @@ class AnthropicProvider:
         input_items: list[ConversationItem],
         tools: list[dict[str, Any]],
         on_text_delta: TextDeltaCallback | None = None,
+        on_thinking_delta: ThinkingDeltaCallback | None = None,
     ) -> ModelResponse:
         started = perf_counter()
 
@@ -205,7 +207,7 @@ class AnthropicProvider:
 
             # Use streaming if callback provided
             if on_text_delta is not None:
-                return self._respond_stream(kwargs, on_text_delta, started)
+                return self._respond_stream(kwargs, on_text_delta, on_thinking_delta, started)
 
             response = self._client.messages.create(**kwargs)
             text, items = _extract_response(response)
@@ -225,6 +227,7 @@ class AnthropicProvider:
         self,
         kwargs: dict[str, Any],
         on_text_delta: TextDeltaCallback,
+        on_thinking_delta: ThinkingDeltaCallback | None,
         started: float,
     ) -> ModelResponse:
         """Handle streaming response."""
@@ -247,6 +250,10 @@ class AnthropicProvider:
                         if event.delta.type == "text_delta":
                             text_parts.append(event.delta.text)
                             on_text_delta(event.delta.text)
+                        elif event.delta.type == "thinking_delta":
+                            # 思维链输出
+                            if on_thinking_delta is not None:
+                                on_thinking_delta(event.delta.thinking)
                     elif event.type == "message_stop":
                         break
 

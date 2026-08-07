@@ -24,6 +24,7 @@ class FakeProvider:
         input_items: list[Any],
         tools: list[dict[str, Any]],
         on_text_delta=None,
+        on_thinking_delta=None,
     ) -> ModelResponse:
         self.inputs.append(list(input_items))
         self.calls += 1

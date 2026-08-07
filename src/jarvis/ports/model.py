@@ -8,6 +8,7 @@ from jarvis.ports.models import ConversationItem, ModelResponse
 
 
 TextDeltaCallback = Callable[[str], None]
+ThinkingDeltaCallback = Callable[[str], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +46,7 @@ class ModelProvider(Protocol):
         input_items: list[ConversationItem],
         tools: list[dict[str, Any]],
         on_text_delta: TextDeltaCallback | None = None,
+        on_thinking_delta: ThinkingDeltaCallback | None = None,
     ) -> ModelResponse: ...
 
     def health_check(self) -> ProviderStatus: ...
