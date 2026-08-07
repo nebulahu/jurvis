@@ -26,6 +26,7 @@ try:
     from jarvis.application.router import Router
     from jarvis.application.planner import Planner, PlanExecutor
     from jarvis.application.reflection import Reflector, ReflectionContext
+    from jarvis.application.tree_search import LATS, LATSSolver
 except ImportError:
     Intent = None  # type: ignore[assignment,misc]
     IntentClassifier = None  # type: ignore[assignment,misc]
@@ -34,6 +35,8 @@ except ImportError:
     PlanExecutor = None  # type: ignore[assignment,misc]
     Reflector = None  # type: ignore[assignment,misc]
     ReflectionContext = None  # type: ignore[assignment,misc]
+    LATS = None  # type: ignore[assignment,misc]
+    LATSSolver = None  # type: ignore[assignment,misc]
 
 
 DEFAULT_INSTRUCTIONS = """你是贾维斯，一个可靠、冷静而友好的中文个人助理。
@@ -68,6 +71,7 @@ class JarvisAgent:
         planner: Any | None = None,
         plan_executor: Any | None = None,
         reflector: Any | None = None,
+        lats_solver: Any | None = None,
     ) -> None:
         self.provider = provider
         self.tools = tools
@@ -86,6 +90,7 @@ class JarvisAgent:
         self.planner = planner
         self.plan_executor = plan_executor
         self.reflector = reflector
+        self.lats_solver = lats_solver
 
     def clear_history(self) -> None:
         self.history.clear()
@@ -155,8 +160,6 @@ class JarvisAgent:
         route_result = self.router.route(user_text, context)
 
         # Log routing decision
-        from jarvis.logging_config import get_logger
-        logger = get_logger(__name__)
         logger.info(
             "意图路由",
             intent=route_result.intent.value,
@@ -172,8 +175,51 @@ class JarvisAgent:
                 self.conversation.add_conversation("assistant", response_text)
             return response_text
 
+        # For COMPLEX_TASK, use LATS if available
+        if route_result.intent.value == "complex_task" and self.lats_solver is not None:
+            return self._solve_with_lats(user_text, on_text_delta, on_thinking_delta)
+
         # For TOOL_USE or if handler didn't return a real response, use ReAct
         return self._react_loop(on_text_delta, on_thinking_delta)
+
+    def _solve_with_lats(
+        self,
+        task: str,
+        on_text_delta: Callable[[str], None] | None = None,
+        on_thinking_delta: Callable[[str], None] | None = None,
+    ) -> str:
+        """Solve complex task using LATS."""
+        logger.info("使用 LATS 求解复杂任务", task=task[:50])
+
+        if self.lats_solver is None:
+            return self._react_loop(on_text_delta, on_thinking_delta)
+
+        try:
+            # Use LATS to find best solution path
+            result = self.lats_solver.solve(
+                task=task,
+                budget=10,  # Number of MCTS simulations
+            )
+            final_answer: str = result[0]
+            search_result = result[1]
+
+            logger.info(
+                "LATS 求解完成",
+                best_path=search_result.best_path,
+                best_reward=search_result.best_reward,
+                nodes_explored=search_result.nodes_explored,
+            )
+
+            # Add to conversation
+            if self.conversation is not None:
+                self.conversation.add_conversation("assistant", final_answer)
+
+            return final_answer
+
+        except Exception as exc:
+            logger.error("LATS 求解失败", error=str(exc))
+            # Fall back to ReAct
+            return self._react_loop(on_text_delta, on_thinking_delta)
 
     def _react_loop(
         self,

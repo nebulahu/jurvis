@@ -57,6 +57,28 @@ def _build_reflector(provider: "ModelProvider | None" = None) -> "Any":
         return None
 
 
+def _build_lats_solver(provider: "ModelProvider | None" = None) -> "Any":
+    """Create a LATS solver if the module is available."""
+    try:
+        from jarvis.application.tree_search import LATS, LATSSolver
+
+        lats = LATS(
+            model_provider=provider,
+            exploration_constant=1.414,
+            max_depth=5,
+            max_children=3,
+        )
+        # Create a simple executor for LATS
+        class SimpleExecutor:
+            def execute(self, action: str) -> str:
+                return f"执行: {action}"
+
+        return LATSSolver(lats=lats, executor=SimpleExecutor())
+    except ImportError:
+        logger.debug("LATS 模块不可用，跳过")
+        return None
+
+
 def _build_memory_service(db_path: Path, memory_root: Path) -> "MemoryService":
     """Create a MemoryService with SQLite DB and Obsidian writer."""
     from jarvis.adapters.storage.obsidian import ObsidianNoteWriter
@@ -162,10 +184,11 @@ def build_agent(
             allow_image_input=settings.desktop_settings.vision_enabled,
         )
 
-    # Build router, planner, and reflector for intelligent routing
+    # Build router, planner, reflector, and LATS for intelligent routing
     router = _build_router(provider)
     planner = _build_planner(provider)
     reflector = _build_reflector(provider)
+    lats_solver = _build_lats_solver(provider)
 
     return JarvisAgent(
         provider=provider,
@@ -181,4 +204,5 @@ def build_agent(
         router=router,
         planner=planner,
         reflector=reflector,
+        lats_solver=lats_solver,
     )
