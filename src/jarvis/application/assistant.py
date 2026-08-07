@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from time import perf_counter
+from typing import Any
 
 from jarvis.ports.models import (
     ChatMessage,
@@ -15,6 +16,18 @@ from jarvis.ports.tools import CancellationManager, ToolRegistry
 from jarvis.ports.model import ModelProvider
 from jarvis.ports.storage import AuditPort, ConversationPort, MemoryPort, ModelRequestPort
 from jarvis.safety import PermissionPolicy
+
+# Optional imports for advanced features
+try:
+    from jarvis.application.intent import Intent, IntentClassifier
+    from jarvis.application.router import Router
+    from jarvis.application.planner import Planner, PlanExecutor
+except ImportError:
+    Intent = None  # type: ignore[assignment,misc]
+    IntentClassifier = None  # type: ignore[assignment,misc]
+    Router = None  # type: ignore[assignment,misc]
+    Planner = None  # type: ignore[assignment,misc]
+    PlanExecutor = None  # type: ignore[assignment,misc]
 
 
 DEFAULT_INSTRUCTIONS = """你是贾维斯，一个可靠、冷静而友好的中文个人助理。
@@ -45,6 +58,9 @@ class JarvisAgent:
         max_history_items: int = 120,
         instructions: str = DEFAULT_INSTRUCTIONS,
         summary_service: SummaryService | None = None,
+        router: Any | None = None,
+        planner: Any | None = None,
+        plan_executor: Any | None = None,
     ) -> None:
         self.provider = provider
         self.tools = tools
@@ -59,6 +75,9 @@ class JarvisAgent:
         self.instructions = instructions
         self.history: list[ConversationItem] = []
         self.summary_service = summary_service
+        self.router = router
+        self.planner = planner
+        self.plan_executor = plan_executor
 
     def clear_history(self) -> None:
         self.history.clear()
@@ -98,6 +117,62 @@ class JarvisAgent:
         if self.conversation is not None:
             self.conversation.add_conversation("user", user_text)
         self.history.append(ChatMessage(role="user", content=user_text))
+
+        # Use router if available for intent-based routing
+        if self.router is not None:
+            return self._chat_with_routing(user_text, on_text_delta, on_thinking_delta)
+
+        # Default: ReAct loop
+        return self._react_loop(on_text_delta, on_thinking_delta)
+
+    def _chat_with_routing(
+        self,
+        user_text: str,
+        on_text_delta: Callable[[str], None] | None = None,
+        on_thinking_delta: Callable[[str], None] | None = None,
+    ) -> str:
+        """Chat with intent-based routing."""
+        from jarvis.application.router import RouteResult
+
+        # Build context
+        context: dict[str, Any] = {
+            "history": self.history,
+            "tools": self.tools.schemas(),
+        }
+
+        # Route based on intent
+        if self.router is None:
+            return self._react_loop(on_text_delta, on_thinking_delta)
+
+        route_result = self.router.route(user_text, context)
+
+        # Log routing decision
+        from jarvis.logging_config import get_logger
+        logger = get_logger(__name__)
+        logger.info(
+            "意图路由",
+            intent=route_result.intent.value,
+            confidence=route_result.confidence,
+        )
+
+        # If routed to a handler that returned a response, use it
+        # Otherwise, fall through to ReAct loop
+        response_text: str = route_result.response
+        if response_text and not response_text.startswith("["):
+            # Handler returned a real response
+            if self.conversation is not None:
+                self.conversation.add_conversation("assistant", response_text)
+            return response_text
+
+        # For TOOL_USE or if handler didn't return a real response, use ReAct
+        return self._react_loop(on_text_delta, on_thinking_delta)
+
+    def _react_loop(
+        self,
+        on_text_delta: Callable[[str], None] | None = None,
+        on_thinking_delta: Callable[[str], None] | None = None,
+    ) -> str:
+        """Standard ReAct loop for tool use and complex reasoning."""
 
         for _ in range(self.max_tool_rounds):
             started = perf_counter()

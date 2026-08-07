@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from jarvis.adapters.desktop import build_desktop_adapters
 from jarvis.adapters.providers import build_provider
@@ -19,6 +19,32 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     from jarvis.application.memory_service import MemoryService
     from jarvis.ports.model import ModelProvider
+
+
+def _build_router(provider: "ModelProvider | None" = None) -> "Any":
+    """Create an intent router if the module is available."""
+    try:
+        from jarvis.application.intent import Intent, IntentClassifier
+        from jarvis.application.router import Router, ChitchatHandler
+
+        classifier = IntentClassifier(model_provider=provider)
+        handlers: dict[Intent, object] = {
+            Intent.CHITCHAT: ChitchatHandler(),
+        }
+        return Router(classifier=classifier, handlers=handlers)  # type: ignore[arg-type]
+    except ImportError:
+        logger.debug("意图路由模块不可用，跳过")
+        return None
+
+
+def _build_planner(provider: "ModelProvider | None" = None) -> "Any":
+    """Create a planner if the module is available."""
+    try:
+        from jarvis.application.planner import Planner
+        return Planner(model_provider=provider, max_steps=10)
+    except ImportError:
+        logger.debug("规划器模块不可用，跳过")
+        return None
 
 
 def _build_memory_service(db_path: Path, memory_root: Path) -> "MemoryService":
@@ -125,6 +151,11 @@ def build_agent(
             max_retries=model.max_retries,
             allow_image_input=settings.desktop_settings.vision_enabled,
         )
+
+    # Build router and planner for intelligent routing
+    router = _build_router(provider)
+    planner = _build_planner(provider)
+
     return JarvisAgent(
         provider=provider,
         tools=tools,
@@ -136,4 +167,6 @@ def build_agent(
         cancellation=cancellation,
         max_tool_rounds=safety.max_tool_rounds,
         max_history_items=settings.max_history_items,
+        router=router,
+        planner=planner,
     )
