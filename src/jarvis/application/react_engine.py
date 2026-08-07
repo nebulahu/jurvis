@@ -9,6 +9,7 @@ from jarvis.logging_config import get_logger
 from jarvis.ports.models import ChatMessage, ConversationItem, ToolCall
 from jarvis.ports.model import ModelProvider, TextDeltaCallback, ThinkingDeltaCallback
 from jarvis.ports.storage import ModelRequestPort, ConversationPort
+from jarvis.ports.trace import TraceCollector
 from jarvis.application.tool_executor import ToolExecutor
 
 logger = get_logger(__name__)
@@ -35,6 +36,7 @@ class ReActEngine:
         conversation: ConversationPort | None = None,
         max_rounds: int = 6,
         reflector: Any | None = None,
+        trace: TraceCollector | None = None,
     ) -> None:
         self._provider = provider
         self._tool_executor = tool_executor
@@ -43,6 +45,7 @@ class ReActEngine:
         self._conversation = conversation
         self._max_rounds = max_rounds
         self._reflector = reflector
+        self._trace = trace
 
     def run(
         self,
@@ -50,17 +53,16 @@ class ReActEngine:
         on_text_delta: TextDeltaCallback | None = None,
         on_thinking_delta: ThinkingDeltaCallback | None = None,
     ) -> str:
-        """Execute the ReAct loop.
+        """Execute the ReAct loop."""
+        session_id = self._trace.current_session_id if self._trace else None
 
-        Args:
-            history: Conversation history
-            on_text_delta: Callback for text streaming
-            on_thinking_delta: Callback for thinking streaming
+        for iteration in range(self._max_rounds):
+            # Emit trace: ReAct iteration
+            if self._trace is not None:
+                self._trace.emit_react_iteration(
+                    session_id, iteration + 1, self._max_rounds, True,
+                )
 
-        Returns:
-            Final answer from the model
-        """
-        for _ in range(self._max_rounds):
             # 1. Get model response
             response = self._get_response(history, on_text_delta, on_thinking_delta)
 
@@ -75,6 +77,13 @@ class ReActEngine:
                 answer = response.output_text.strip() or "我没有生成可显示的回答。"
                 if self._conversation is not None:
                     self._conversation.add_conversation("assistant", answer)
+
+                # Emit trace: ReAct complete
+                if self._trace is not None:
+                    self._trace.emit_react_iteration(
+                        session_id, iteration + 1, self._max_rounds, False,
+                    )
+
                 return answer
 
             # 4. Execute tools
@@ -92,6 +101,17 @@ class ReActEngine:
     ) -> Any:
         """Get response from the model."""
         started = perf_counter()
+        session_id = self._trace.current_session_id if self._trace else None
+
+        # Emit trace: model request
+        if self._trace is not None:
+            self._trace.emit_model_request(
+                session_id,
+                str(getattr(self._provider, "model", "unknown")),
+                str(getattr(self._provider, "api_mode", "unknown")),
+                len(history),
+                len(self._tool_executor._tools.schemas()),
+            )
 
         try:
             response = self._provider.respond(
@@ -102,22 +122,49 @@ class ReActEngine:
                 on_thinking_delta=on_thinking_delta,
             )
         except Exception as exc:
+            duration_ms = (perf_counter() - started) * 1000
+
+            # Emit trace: model error
+            if self._trace is not None:
+                self._trace.emit_error(session_id, str(exc), "model_request")
+
             if self._model_requests is not None:
                 self._model_requests.add_model_request(
                     model=str(getattr(self._provider, "model", "unknown")),
                     api_mode=str(getattr(self._provider, "api_mode", "unknown")),
-                    latency_ms=round((perf_counter() - started) * 1000),
+                    latency_ms=round(duration_ms),
                     status="error",
                     error=str(exc),
                 )
             raise
+
+        duration_ms = (perf_counter() - started) * 1000
+
+        # Extract thinking text if available
+        thinking_text = ""
+        if hasattr(response, "thinking_text"):
+            thinking_text = response.thinking_text or ""
+
+        # Emit trace: model response
+        if self._trace is not None:
+            has_tool_calls = any(isinstance(item, ToolCall) for item in response.output_items)
+            self._trace.emit_model_response(
+                session_id,
+                response.model or str(getattr(self._provider, "model", "unknown")),
+                response.output_text,
+                has_tool_calls,
+                response.input_tokens,
+                response.output_tokens,
+                thinking_text,
+                duration_ms,
+            )
 
         # Record successful request
         if self._model_requests is not None:
             self._model_requests.add_model_request(
                 model=response.model or str(getattr(self._provider, "model", "unknown")),
                 api_mode=str(getattr(self._provider, "api_mode", "unknown")),
-                latency_ms=round((perf_counter() - started) * 1000),
+                latency_ms=round(duration_ms),
                 status="success",
                 input_tokens=response.input_tokens,
                 output_tokens=response.output_tokens,
@@ -149,6 +196,8 @@ class ReActEngine:
         """Reflect on tool execution results."""
         from jarvis.application.reflection import ReflectionContext
 
+        session_id = self._trace.current_session_id if self._trace else None
+
         for result in results:
             if result.error:
                 reflection_context = ReflectionContext(
@@ -160,6 +209,15 @@ class ReActEngine:
                 if self._reflector is None:
                     continue
                 reflection = self._reflector.reflect(reflection_context)
+
+                # Emit trace: reflection
+                if self._trace is not None:
+                    self._trace.emit_reflection(
+                        session_id,
+                        reflection.should_retry,
+                        reflection.feedback,
+                        reflection.suggestion or "",
+                    )
 
                 if reflection.should_retry:
                     logger.info(

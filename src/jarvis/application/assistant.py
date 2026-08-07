@@ -1,6 +1,7 @@
 """Jarvis Agent - Main orchestrator for the AI assistant."""
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -9,6 +10,7 @@ from jarvis.ports.models import ConversationItem
 from jarvis.ports.tools import CancellationManager, ToolRegistry
 from jarvis.ports.model import ModelProvider, TextDeltaCallback, ThinkingDeltaCallback
 from jarvis.ports.storage import AuditPort, ConversationPort, MemoryPort, ModelRequestPort
+from jarvis.ports.trace import TraceCollector
 from jarvis.safety import PermissionPolicy
 from jarvis.application.summary import SummaryService
 from jarvis.application.tool_executor import ToolExecutor
@@ -75,6 +77,7 @@ class JarvisAgent:
         plan_executor: Any | None = None,
         reflector: Any | None = None,
         lats_solver: Any | None = None,
+        trace_collector: TraceCollector | None = None,
     ) -> None:
         # Core components
         self.provider = provider
@@ -83,6 +86,7 @@ class JarvisAgent:
         self.memory = memory
         self.cancellation = cancellation or CancellationManager()
         self.instructions = instructions
+        self._trace = trace_collector
 
         # Extracted components
         self._history_manager = HistoryManager(
@@ -94,6 +98,7 @@ class JarvisAgent:
             tools=tools,
             permissions=permissions,
             audit=audit,
+            trace=trace_collector,
         )
         self._react_engine = ReActEngine(
             provider=provider,
@@ -103,6 +108,7 @@ class JarvisAgent:
             conversation=conversation,
             max_rounds=max_tool_rounds,
             reflector=reflector,
+            trace=trace_collector,
         )
         self._lats_engine = LATSEngine(
             lats_solver=lats_solver,
@@ -163,19 +169,38 @@ class JarvisAgent:
         self.cancellation.clear_cancellation()
         self._history_manager.trim()
 
-        # Add user message to history
-        self._history_manager.add_user_message(user_text)
+        # Start trace session
+        session_id = f"chat_{uuid.uuid4().hex[:12]}"
+        if self._trace is not None:
+            self._trace.start_session(session_id, {"user_text": user_text[:100]})
 
-        # Use router if available for intent-based routing
-        if self.router is not None:
-            return self._chat_with_routing(user_text, on_text_delta, on_thinking_delta)
+        try:
+            # Add user message to history
+            self._history_manager.add_user_message(user_text)
 
-        # Default: ReAct loop
-        return self._react_engine.run(
-            self._history_manager.history,
-            on_text_delta,
-            on_thinking_delta,
-        )
+            # Use router if available for intent-based routing
+            if self.router is not None:
+                response = self._chat_with_routing(user_text, on_text_delta, on_thinking_delta)
+            else:
+                # Default: ReAct loop
+                response = self._react_engine.run(
+                    self._history_manager.history,
+                    on_text_delta,
+                    on_thinking_delta,
+                )
+
+            # End trace session
+            if self._trace is not None:
+                self._trace.end_session(session_id)
+
+            return response
+
+        except Exception as e:
+            # Record error in trace
+            if self._trace is not None:
+                self._trace.emit_error(session_id, str(e), "chat")
+                self._trace.end_session(session_id)
+            raise
 
     def _chat_with_routing(
         self,
@@ -198,6 +223,16 @@ class JarvisAgent:
 
         route_result = self.router.route(user_text, context)
 
+        # Emit trace events
+        session_id = self._trace.current_session_id if self._trace else None
+        if self._trace is not None:
+            self._trace.emit_intent(
+                session_id,
+                route_result.intent.value,
+                route_result.confidence,
+                route_result.reasoning,
+            )
+
         # Log routing decision
         logger.info(
             "意图路由",
@@ -208,14 +243,20 @@ class JarvisAgent:
         # If routed to a handler that returned a response, use it
         response_text: str = route_result.response
         if response_text and not response_text.startswith("["):
+            if self._trace is not None:
+                self._trace.emit_route(session_id, "handler", route_result.intent.value)
             self._history_manager.add_assistant_message(response_text)
             return response_text
 
         # For COMPLEX_TASK, use LATS if available
         if route_result.intent.value == "complex_task" and self._lats_engine.is_available:
+            if self._trace is not None:
+                self._trace.emit_route(session_id, "lats", route_result.intent.value)
             return self._solve_with_lats(user_text, on_text_delta, on_thinking_delta)
 
         # For TOOL_USE or if handler didn't return a real response, use ReAct
+        if self._trace is not None:
+            self._trace.emit_route(session_id, "react", route_result.intent.value)
         return self._react_engine.run(
             self._history_manager.history,
             on_text_delta,

@@ -21,6 +21,34 @@ if TYPE_CHECKING:
     from jarvis.ports.model import ModelProvider
 
 
+def _build_trace_collector(
+    db_path: Path,
+    enable_cli: bool = True,
+    enable_storage: bool = True,
+) -> "Any":
+    """Create a trace collector with CLI renderer and SQLite store."""
+    from jarvis.application.trace_collector import AgentTraceCollector
+
+    store = None
+    renderer = None
+
+    if enable_storage:
+        try:
+            from jarvis.adapters.storage.trace_store import SQLiteTraceStore
+            store = SQLiteTraceStore(db_path)
+        except Exception as e:
+            logger.debug("trace_store_init_failed", error=str(e))
+
+    if enable_cli:
+        try:
+            from jarvis.interfaces.trace_renderer import CLITraceRenderer
+            renderer = CLITraceRenderer(verbose=False, show_data=False)
+        except Exception as e:
+            logger.debug("trace_renderer_init_failed", error=str(e))
+
+    return AgentTraceCollector(store=store, renderer=renderer, enabled=True)
+
+
 def _build_router(provider: "ModelProvider | None" = None) -> "Any":
     """Create an intent router if the module is available."""
     try:
@@ -190,6 +218,13 @@ def build_agent(
     reflector = _build_reflector(provider)
     lats_solver = _build_lats_solver(provider)
 
+    # Build trace collector for observability
+    trace_collector = _build_trace_collector(
+        db_path=storage.db_path,
+        enable_cli=True,
+        enable_storage=True,
+    )
+
     return JarvisAgent(
         provider=provider,
         tools=tools,
@@ -205,4 +240,5 @@ def build_agent(
         planner=planner,
         reflector=reflector,
         lats_solver=lats_solver,
+        trace_collector=trace_collector,
     )
