@@ -72,7 +72,7 @@ def _load_skill_from_file(file_path: Path) -> SkillSpec | None:
         skill = SkillSpec(
             name=str(name),
             description=str(description),
-            parameters=dict(parameters),
+            parameters=dict(parameters) if parameters else {},
             handler=handler,
             risk=risk,
         )

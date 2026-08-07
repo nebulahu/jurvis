@@ -23,7 +23,7 @@ class StdioMCPClient:
     def __init__(self, command: str, args: list[str] | None = None) -> None:
         self._command = command
         self._args = args or []
-        self._process: subprocess.Popen | None = None
+        self._process: subprocess.Popen[str] | None = None
         self._server_name = f"{command} {' '.join(self._args)}"
         self._tools: list[MCPToolSpec] = []
         self._request_id = 0
@@ -102,14 +102,15 @@ class StdioMCPClient:
             error = response["error"]
             raise RuntimeError(f"MCP 错误: {error.get('message', error)}")
 
-        return response.get("result", {})
+        result: dict[str, Any] = response.get("result", {})
+        return result
 
     def _send_notification(self, method: str, params: dict[str, Any] | None = None) -> None:
         """Send a JSON-RPC notification (no response expected)."""
         if self._process is None or self._process.stdin is None:
             raise RuntimeError("MCP 服务器未连接")
 
-        notification = {
+        notification: dict[str, Any] = {
             "jsonrpc": "2.0",
             "method": method,
         }

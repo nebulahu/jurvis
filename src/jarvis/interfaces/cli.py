@@ -66,6 +66,7 @@ def _chat_with_stream(
     assistant_name: str,
     text: str,
     on_text_delta: Callable[[str], None] | None = None,
+    timeout: float = 120.0,
 ) -> str:
     started = False
 
@@ -78,17 +79,36 @@ def _chat_with_stream(
         if on_text_delta is not None:
             on_text_delta(delta)
 
-    try:
-        answer = agent.chat(text, on_text_delta=write_delta)
+    # 使用线程包装，防止流式响应卡死
+    result: list[str] = []
+    error: list[BaseException] = []
+
+    def _run() -> None:
+        try:
+            result.append(agent.chat(text, on_text_delta=write_delta))
+        except BaseException as exc:
+            error.append(exc)
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout)
+
+    if thread.is_alive():
+        # 超时未完成
+        print(f"\n\n请求超时（{timeout:.0f}秒），请检查网络连接后重试。", file=sys.stderr)
+        raise TimeoutError(f"请求超时（{timeout:.0f}秒）")
+
+    if error:
         if started:
             print()
-        else:
-            print(f"\n{assistant_name}> {answer}")
-        return answer
-    except Exception:
-        if started:
-            print()
-        raise
+        raise error[0]
+
+    answer = result[0] if result else ""
+    if started:
+        print()
+    else:
+        print(f"\n{assistant_name}> {answer}")
+    return answer
 
 
 def _wait_for_recording_stop(limit_reached: threading.Event) -> bool:
@@ -359,6 +379,27 @@ def main() -> None:
             continue
         try:
             _chat_with_stream(agent, settings.assistant_name, text)
+        except KeyboardInterrupt:
+            print("\n已取消。")
+        except TimeoutError:
+            logger.error("请求超时")
+            print("\n请求超时，请检查网络连接后重试。", file=sys.stderr)
+        except ConnectionError as exc:
+            logger.error("网络连接失败", error=str(exc))
+            print(f"\n网络连接失败：{exc}", file=sys.stderr)
+            print("请检查网络连接或代理设置。", file=sys.stderr)
         except Exception as exc:
-            logger.error("请求失败", error_type=type(exc).__name__, error=str(exc))
-            print(f"\n请求失败：{type(exc).__name__}: {exc}", file=sys.stderr)
+            error_msg = str(exc)
+            # 提取常见网络错误的关键信息
+            if "SSL" in error_msg or "ssl" in error_msg:
+                logger.error("SSL 连接错误", error_type=type(exc).__name__, error=error_msg)
+                print("\nSSL 连接错误，请检查网络代理或防火墙设置。", file=sys.stderr)
+            elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+                logger.error("请求超时", error_type=type(exc).__name__, error=error_msg)
+                print("\n请求超时，请检查网络连接后重试。", file=sys.stderr)
+            elif "connection" in error_msg.lower() or "reset" in error_msg.lower():
+                logger.error("连接被重置", error_type=type(exc).__name__, error=error_msg)
+                print("\n连接被重置，请检查网络连接后重试。", file=sys.stderr)
+            else:
+                logger.error("请求失败", error_type=type(exc).__name__, error=error_msg)
+                print(f"\n请求失败：{type(exc).__name__}: {exc}", file=sys.stderr)

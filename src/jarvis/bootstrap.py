@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -8,6 +9,7 @@ from jarvis.adapters.providers import build_provider
 from jarvis.adapters.tools import build_default_registry
 from jarvis.application.assistant import JarvisAgent
 from jarvis.logging_config import get_logger
+from jarvis.ports.mcp import MCPClient
 from jarvis.ports.tools import CancellationManager
 from jarvis.config import Settings
 from jarvis.safety import ApprovalCallback, PathGuard, PermissionPolicy, RiskLevel
@@ -16,6 +18,7 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from jarvis.application.memory_service import MemoryService
+    from jarvis.ports.model import ModelProvider
 
 
 def _build_memory_service(db_path: Path, memory_root: Path) -> "MemoryService":
@@ -87,9 +90,9 @@ def build_agent(
                 mcp_tools = client.list_tools()
                 for mcp_tool in mcp_tools:
                     # Create a closure to capture the client and tool name
-                    def make_handler(c: object, n: str) -> object:
+                    def make_handler(c: MCPClient, n: str) -> Callable[..., str]:
                         def handler(**kwargs: object) -> str:
-                            return c.call_tool(n, kwargs)  # type: ignore
+                            return c.call_tool(n, kwargs)
                         return handler
 
                     tools.register(AppTool(
@@ -107,7 +110,7 @@ def build_agent(
     # Use Anthropic provider if API key is configured
     if model.anthropic_api_key:
         from jarvis.adapters.providers.anthropic import build_anthropic_provider
-        provider = build_anthropic_provider(
+        provider: ModelProvider = build_anthropic_provider(
             api_key=model.anthropic_api_key,
             model=model.anthropic_model,
         )
