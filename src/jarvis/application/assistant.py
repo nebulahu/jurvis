@@ -1,42 +1,35 @@
+"""Jarvis Agent - Main orchestrator for the AI assistant."""
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
-from time import perf_counter
 from typing import Any
 
 from jarvis.logging_config import get_logger
-from jarvis.ports.models import (
-    ChatMessage,
-    ConversationItem,
-    ToolCall,
-    ToolResult,
-)
-from jarvis.application.summary import SummaryService
+from jarvis.ports.models import ConversationItem
 from jarvis.ports.tools import CancellationManager, ToolRegistry
-from jarvis.ports.model import ModelProvider
+from jarvis.ports.model import ModelProvider, TextDeltaCallback, ThinkingDeltaCallback
 from jarvis.ports.storage import AuditPort, ConversationPort, MemoryPort, ModelRequestPort
 from jarvis.safety import PermissionPolicy
+from jarvis.application.summary import SummaryService
+from jarvis.application.tool_executor import ToolExecutor
+from jarvis.application.react_engine import ReActEngine
+from jarvis.application.lats_engine import LATSEngine
+from jarvis.application.history_manager import HistoryManager
 
 logger = get_logger(__name__)
 
 # Optional imports for advanced features
 try:
-    from jarvis.application.intent import Intent, IntentClassifier
+    from jarvis.application.intent import IntentClassifier
     from jarvis.application.router import Router
     from jarvis.application.planner import Planner, PlanExecutor
-    from jarvis.application.reflection import Reflector, ReflectionContext
-    from jarvis.application.tree_search import LATS, LATSSolver
+    from jarvis.application.reflection import Reflector
 except ImportError:
-    Intent = None  # type: ignore[assignment,misc]
     IntentClassifier = None  # type: ignore[assignment,misc]
     Router = None  # type: ignore[assignment,misc]
     Planner = None  # type: ignore[assignment,misc]
     PlanExecutor = None  # type: ignore[assignment,misc]
     Reflector = None  # type: ignore[assignment,misc]
-    ReflectionContext = None  # type: ignore[assignment,misc]
-    LATS = None  # type: ignore[assignment,misc]
-    LATSSolver = None  # type: ignore[assignment,misc]
 
 
 DEFAULT_INSTRUCTIONS = """你是贾维斯，一个可靠、冷静而友好的中文个人助理。
@@ -52,6 +45,16 @@ DEFAULT_INSTRUCTIONS = """你是贾维斯，一个可靠、冷静而友好的中
 
 
 class JarvisAgent:
+    """Main agent orchestrator.
+
+    Composes:
+    - HistoryManager: Manages conversation history
+    - ToolExecutor: Executes tools with permissions and audit
+    - ReActEngine: Runs ReAct loops for tool use
+    - LATSEngine: Runs LATS for complex tasks
+    - Router: Routes based on intent (optional)
+    """
+
     def __init__(
         self,
         provider: ModelProvider,
@@ -73,89 +76,125 @@ class JarvisAgent:
         reflector: Any | None = None,
         lats_solver: Any | None = None,
     ) -> None:
+        # Core components
         self.provider = provider
         self.tools = tools
         self.permissions = permissions
         self.memory = memory
-        self.model_requests = model_requests
-        self.conversation = conversation
-        self.audit = audit
         self.cancellation = cancellation or CancellationManager()
-        self.max_tool_rounds = max_tool_rounds
-        self.max_history_items = max_history_items
         self.instructions = instructions
-        self.history: list[ConversationItem] = []
-        self.summary_service = summary_service
+
+        # Extracted components
+        self._history_manager = HistoryManager(
+            conversation=conversation,
+            summary_service=summary_service,
+            max_items=max_history_items,
+        )
+        self._tool_executor = ToolExecutor(
+            tools=tools,
+            permissions=permissions,
+            audit=audit,
+        )
+        self._react_engine = ReActEngine(
+            provider=provider,
+            tool_executor=self._tool_executor,
+            instructions=instructions,
+            model_requests=model_requests,
+            conversation=conversation,
+            max_rounds=max_tool_rounds,
+            reflector=reflector,
+        )
+        self._lats_engine = LATSEngine(
+            lats_solver=lats_solver,
+            conversation=conversation,
+        )
+
+        # Optional advanced components
         self.router = router
         self.planner = planner
         self.plan_executor = plan_executor
         self.reflector = reflector
-        self.lats_solver = lats_solver
+        self._model_requests = model_requests
+        self._audit = audit
+
+    @property
+    def model_requests(self) -> ModelRequestPort | None:
+        """Get model request port for status reporting."""
+        return self._model_requests
+
+    @property
+    def audit(self) -> AuditPort | None:
+        """Get audit port for status reporting."""
+        return self._audit
+
+    @property
+    def history(self) -> list[ConversationItem]:
+        """Get or set conversation history."""
+        return self._history_manager.history
+
+    @history.setter
+    def history(self, value: list[ConversationItem]) -> None:
+        self._history_manager._history = list(value)
 
     def clear_history(self) -> None:
-        self.history.clear()
+        """Clear conversation history."""
+        self._history_manager.clear()
 
     def cancel_pending_actions(self) -> None:
+        """Request cancellation of pending actions."""
         self.cancellation.request_cancellation()
-
-    def _find_next_user_message(self, start: int) -> int | None:
-        """Find index of the next user message at or after *start*."""
-        for index in range(start, len(self.history)):
-            item = self.history[index]
-            if isinstance(item, ChatMessage) and item.role == "user":
-                return index
-        return None
-
-    def _trim_history(self) -> None:
-        if len(self.history) <= self.max_history_items:
-            return
-        cutoff = len(self.history) - self.max_history_items
-        user_index = self._find_next_user_message(cutoff)
-        if user_index is None:
-            return
-        if self.summary_service is not None:
-            to_summarize = self.history[:user_index]
-            if to_summarize:
-                self.summary_service.summarize(to_summarize)
-        self.history = self.history[user_index:]
 
     def chat(
         self,
         user_text: str,
-        on_text_delta: Callable[[str], None] | None = None,
-        on_thinking_delta: Callable[[str], None] | None = None,
+        on_text_delta: TextDeltaCallback | None = None,
+        on_thinking_delta: ThinkingDeltaCallback | None = None,
     ) -> str:
+        """Process a user message and return a response.
+
+        Args:
+            user_text: The user's message
+            on_text_delta: Callback for text streaming
+            on_thinking_delta: Callback for thinking streaming
+
+        Returns:
+            The assistant's response
+        """
         self.cancellation.clear_cancellation()
-        self._trim_history()
-        if self.conversation is not None:
-            self.conversation.add_conversation("user", user_text)
-        self.history.append(ChatMessage(role="user", content=user_text))
+        self._history_manager.trim()
+
+        # Add user message to history
+        self._history_manager.add_user_message(user_text)
 
         # Use router if available for intent-based routing
         if self.router is not None:
             return self._chat_with_routing(user_text, on_text_delta, on_thinking_delta)
 
         # Default: ReAct loop
-        return self._react_loop(on_text_delta, on_thinking_delta)
+        return self._react_engine.run(
+            self._history_manager.history,
+            on_text_delta,
+            on_thinking_delta,
+        )
 
     def _chat_with_routing(
         self,
         user_text: str,
-        on_text_delta: Callable[[str], None] | None = None,
-        on_thinking_delta: Callable[[str], None] | None = None,
+        on_text_delta: TextDeltaCallback | None = None,
+        on_thinking_delta: ThinkingDeltaCallback | None = None,
     ) -> str:
         """Chat with intent-based routing."""
-        from jarvis.application.router import RouteResult
-
         # Build context
-        context: dict[str, Any] = {
-            "history": self.history,
-            "tools": self.tools.schemas(),
-        }
+        context = self._history_manager.get_context()
+        context["tools"] = self.tools.schemas()
 
         # Route based on intent
         if self.router is None:
-            return self._react_loop(on_text_delta, on_thinking_delta)
+            return self._react_engine.run(
+                self._history_manager.history,
+                on_text_delta,
+                on_thinking_delta,
+            )
 
         route_result = self.router.route(user_text, context)
 
@@ -167,166 +206,35 @@ class JarvisAgent:
         )
 
         # If routed to a handler that returned a response, use it
-        # Otherwise, fall through to ReAct loop
         response_text: str = route_result.response
         if response_text and not response_text.startswith("["):
-            # Handler returned a real response
-            if self.conversation is not None:
-                self.conversation.add_conversation("assistant", response_text)
+            self._history_manager.add_assistant_message(response_text)
             return response_text
 
         # For COMPLEX_TASK, use LATS if available
-        if route_result.intent.value == "complex_task" and self.lats_solver is not None:
+        if route_result.intent.value == "complex_task" and self._lats_engine.is_available:
             return self._solve_with_lats(user_text, on_text_delta, on_thinking_delta)
 
         # For TOOL_USE or if handler didn't return a real response, use ReAct
-        return self._react_loop(on_text_delta, on_thinking_delta)
+        return self._react_engine.run(
+            self._history_manager.history,
+            on_text_delta,
+            on_thinking_delta,
+        )
 
     def _solve_with_lats(
         self,
         task: str,
-        on_text_delta: Callable[[str], None] | None = None,
-        on_thinking_delta: Callable[[str], None] | None = None,
+        on_text_delta: TextDeltaCallback | None = None,
+        on_thinking_delta: ThinkingDeltaCallback | None = None,
     ) -> str:
         """Solve complex task using LATS."""
-        logger.info("使用 LATS 求解复杂任务", task=task[:50])
-
-        if self.lats_solver is None:
-            return self._react_loop(on_text_delta, on_thinking_delta)
-
         try:
-            # Use LATS to find best solution path
-            result = self.lats_solver.solve(
-                task=task,
-                budget=10,  # Number of MCTS simulations
-            )
-            final_answer: str = result[0]
-            search_result = result[1]
-
-            logger.info(
-                "LATS 求解完成",
-                best_path=search_result.best_path,
-                best_reward=search_result.best_reward,
-                nodes_explored=search_result.nodes_explored,
-            )
-
-            # Add to conversation
-            if self.conversation is not None:
-                self.conversation.add_conversation("assistant", final_answer)
-
-            return final_answer
-
-        except Exception as exc:
-            logger.error("LATS 求解失败", error=str(exc))
+            return self._lats_engine.solve(task)
+        except Exception:
             # Fall back to ReAct
-            return self._react_loop(on_text_delta, on_thinking_delta)
-
-    def _react_loop(
-        self,
-        on_text_delta: Callable[[str], None] | None = None,
-        on_thinking_delta: Callable[[str], None] | None = None,
-    ) -> str:
-        """Standard ReAct loop for tool use and complex reasoning."""
-
-        for _ in range(self.max_tool_rounds):
-            started = perf_counter()
-            try:
-                response = self.provider.respond(
-                    instructions=self.instructions,
-                    input_items=self.history,
-                    tools=self.tools.schemas(),
-                    on_text_delta=on_text_delta,
-                    on_thinking_delta=on_thinking_delta,
-                )
-            except Exception as exc:
-                if self.model_requests is not None:
-                    self.model_requests.add_model_request(
-                        model=str(getattr(self.provider, "model", "unknown")),
-                        api_mode=str(getattr(self.provider, "api_mode", "unknown")),
-                        latency_ms=round((perf_counter() - started) * 1000),
-                        status="error",
-                        error=str(exc),
-                    )
-                raise
-            if self.model_requests is not None:
-                self.model_requests.add_model_request(
-                    model=response.model or str(getattr(self.provider, "model", "unknown")),
-                    api_mode=str(getattr(self.provider, "api_mode", "unknown")),
-                    latency_ms=round((perf_counter() - started) * 1000),
-                    status="success",
-                    input_tokens=response.input_tokens,
-                    output_tokens=response.output_tokens,
-                )
-            self.history.extend(response.output_items)
-            calls = [item for item in response.output_items if isinstance(item, ToolCall)]
-            if not calls:
-                answer = response.output_text.strip() or "我没有生成可显示的回答。"
-                if self.conversation is not None:
-                    self.conversation.add_conversation("assistant", answer)
-                self._trim_history()
-                return answer
-
-            for call in calls:
-                call_id = call.call_id
-                name = call.name
-                raw_arguments = call.arguments
-                try:
-                    arguments = (
-                        json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
-                    )
-                    if not isinstance(arguments, dict):
-                        raise ValueError("工具参数必须是 JSON 对象")
-                    tool = self.tools.get(name)
-                    risk = tool.resolve_risk(arguments)
-                    preview_arguments = tool.preview_arguments(arguments)
-                    decision = self.permissions.decide(
-                        name, risk, preview_arguments
-                    )
-                    if decision.allowed:
-                        try:
-                            result = self.tools.execute(name, arguments)
-                        except Exception as exc:
-                            result = f"工具执行失败：{type(exc).__name__}: {exc}"
-                    else:
-                        result = f"操作未执行：{decision.reason}"
-                    if self.audit is not None:
-                        self.audit.add_audit(
-                            name,
-                            preview_arguments,
-                            decision.allowed,
-                            decision.reason,
-                            result,
-                            int(risk),
-                        )
-                except Exception as exc:
-                    arguments = {}
-                    result = f"工具调用无效：{type(exc).__name__}: {exc}"
-                    if self.audit is not None:
-                        self.audit.add_audit(name or "<missing>", arguments, False, "参数无效", result)
-
-                # Reflexion: Reflect on tool result and potentially adjust
-                if self.reflector is not None:
-                    reflection_context = ReflectionContext(
-                        task=str(arguments),
-                        action=name or "unknown",
-                        result=result,
-                        error=result if "失败" in result or "错误" in result else None,
-                    )
-                    reflection = self.reflector.reflect(reflection_context)
-
-                    if reflection.should_retry and reflection.adjusted_task:
-                        # Log reflection feedback
-                        logger.info(
-                            "反思重试",
-                            feedback=reflection.feedback[:100],
-                            attempt=reflection.retry_count,
-                            suggestion=reflection.suggestion or "",
-                        )
-
-                self.history.append(ToolResult(call_id=call_id, output=result))
-
-        answer = f"为保证安全，我在连续 {self.max_tool_rounds} 轮工具调用后停止了。请缩小任务范围或确认下一步。"
-        if self.conversation is not None:
-            self.conversation.add_conversation("assistant", answer)
-        self._trim_history()
-        return answer
+            return self._react_engine.run(
+                self._history_manager.history,
+                on_text_delta,
+                on_thinking_delta,
+            )

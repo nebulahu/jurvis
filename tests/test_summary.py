@@ -142,7 +142,7 @@ def test_agent_trim_history_triggers_summary(tmp_path: Path) -> None:
         ChatMessage(role="user", content="第3轮"),
     ]
 
-    agent._trim_history()
+    agent._history_manager.trim()
 
     assert len(agent.history) <= 4
     summaries = memory.list_summaries()
@@ -176,7 +176,7 @@ def test_agent_trim_history_fallback_on_no_service(tmp_path: Path) -> None:
         ChatMessage(role="user", content="第3轮"),
     ]
 
-    agent._trim_history()
+    agent._history_manager.trim()
 
     assert len(agent.history) <= 4
     assert memory.list_summaries() == []
