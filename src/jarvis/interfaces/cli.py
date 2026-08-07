@@ -67,6 +67,7 @@ def _chat_with_stream(
     text: str,
     on_text_delta: Callable[[str], None] | None = None,
     on_thinking_delta: Callable[[str], None] | None = None,
+    enable_thinking: bool = False,
     timeout: float = 60.0,
 ) -> str:
     started = False
@@ -90,6 +91,9 @@ def _chat_with_stream(
         if on_thinking_delta is not None:
             on_thinking_delta(delta)
 
+    # 根据配置决定是否传入思维链回调
+    thinking_callback = write_thinking if enable_thinking else None
+
     # 使用线程包装，防止流式响应卡死
     result: list[str] = []
     error: list[BaseException] = []
@@ -97,7 +101,7 @@ def _chat_with_stream(
 
     def _run() -> None:
         try:
-            result.append(agent.chat(text, on_text_delta=write_delta, on_thinking_delta=write_thinking))
+            result.append(agent.chat(text, on_text_delta=write_delta, on_thinking_delta=thinking_callback))
         except BaseException as exc:
             if not cancelled.is_set():
                 error.append(exc)
@@ -404,7 +408,12 @@ def main() -> None:
             _wake_mode(agent, settings)
             continue
         try:
-            _chat_with_stream(agent, settings.assistant_name, text)
+            _chat_with_stream(
+                agent,
+                settings.assistant_name,
+                text,
+                enable_thinking=settings.model_settings.enable_thinking,
+            )
         except TimeoutError:
             logger.error("请求超时")
             print("\n请求超时，请检查网络连接后重试。", file=sys.stderr)
