@@ -47,6 +47,16 @@ def _build_planner(provider: "ModelProvider | None" = None) -> "Any":
         return None
 
 
+def _build_reflector(provider: "ModelProvider | None" = None) -> "Any":
+    """Create a reflector if the module is available."""
+    try:
+        from jarvis.application.reflection import Reflector
+        return Reflector(model_provider=provider, confidence_threshold=0.7, max_retries=3)
+    except ImportError:
+        logger.debug("反思模块不可用，跳过")
+        return None
+
+
 def _build_memory_service(db_path: Path, memory_root: Path) -> "MemoryService":
     """Create a MemoryService with SQLite DB and Obsidian writer."""
     from jarvis.adapters.storage.obsidian import ObsidianNoteWriter
@@ -152,9 +162,10 @@ def build_agent(
             allow_image_input=settings.desktop_settings.vision_enabled,
         )
 
-    # Build router and planner for intelligent routing
+    # Build router, planner, and reflector for intelligent routing
     router = _build_router(provider)
     planner = _build_planner(provider)
+    reflector = _build_reflector(provider)
 
     return JarvisAgent(
         provider=provider,
@@ -169,4 +180,5 @@ def build_agent(
         max_history_items=settings.max_history_items,
         router=router,
         planner=planner,
+        reflector=reflector,
     )

@@ -5,6 +5,7 @@ from collections.abc import Callable
 from time import perf_counter
 from typing import Any
 
+from jarvis.logging_config import get_logger
 from jarvis.ports.models import (
     ChatMessage,
     ConversationItem,
@@ -17,17 +18,22 @@ from jarvis.ports.model import ModelProvider
 from jarvis.ports.storage import AuditPort, ConversationPort, MemoryPort, ModelRequestPort
 from jarvis.safety import PermissionPolicy
 
+logger = get_logger(__name__)
+
 # Optional imports for advanced features
 try:
     from jarvis.application.intent import Intent, IntentClassifier
     from jarvis.application.router import Router
     from jarvis.application.planner import Planner, PlanExecutor
+    from jarvis.application.reflection import Reflector, ReflectionContext
 except ImportError:
     Intent = None  # type: ignore[assignment,misc]
     IntentClassifier = None  # type: ignore[assignment,misc]
     Router = None  # type: ignore[assignment,misc]
     Planner = None  # type: ignore[assignment,misc]
     PlanExecutor = None  # type: ignore[assignment,misc]
+    Reflector = None  # type: ignore[assignment,misc]
+    ReflectionContext = None  # type: ignore[assignment,misc]
 
 
 DEFAULT_INSTRUCTIONS = """你是贾维斯，一个可靠、冷静而友好的中文个人助理。
@@ -61,6 +67,7 @@ class JarvisAgent:
         router: Any | None = None,
         planner: Any | None = None,
         plan_executor: Any | None = None,
+        reflector: Any | None = None,
     ) -> None:
         self.provider = provider
         self.tools = tools
@@ -78,6 +85,7 @@ class JarvisAgent:
         self.router = router
         self.planner = planner
         self.plan_executor = plan_executor
+        self.reflector = reflector
 
     def clear_history(self) -> None:
         self.history.clear()
@@ -249,6 +257,25 @@ class JarvisAgent:
                     result = f"工具调用无效：{type(exc).__name__}: {exc}"
                     if self.audit is not None:
                         self.audit.add_audit(name or "<missing>", arguments, False, "参数无效", result)
+
+                # Reflexion: Reflect on tool result and potentially adjust
+                if self.reflector is not None:
+                    reflection_context = ReflectionContext(
+                        task=str(arguments),
+                        action=name or "unknown",
+                        result=result,
+                        error=result if "失败" in result or "错误" in result else None,
+                    )
+                    reflection = self.reflector.reflect(reflection_context)
+
+                    if reflection.should_retry and reflection.adjusted_task:
+                        # Log reflection feedback
+                        logger.info(
+                            "反思重试",
+                            feedback=reflection.feedback[:100],
+                            attempt=reflection.retry_count,
+                            suggestion=reflection.suggestion or "",
+                        )
 
                 self.history.append(ToolResult(call_id=call_id, output=result))
 
