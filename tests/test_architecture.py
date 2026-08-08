@@ -4,12 +4,12 @@ import sys
 
 def test_compatibility_modules_forward_to_new_boundaries() -> None:
     from jarvis.adapters.desktop import WindowsDesktopObserver
-    from jarvis.agent import JarvisAgent as CompatAgent
+    from jarvis.application.assistant import JarvisAgent as CompatAgent
     from jarvis.application.assistant import JarvisAgent
-    from jarvis.cli import main as compat_main
+    from jarvis.interfaces.cli import main as compat_main
     from jarvis.interfaces.cli import main
     from jarvis.ports.audio import AudioClip as PortAudioClip
-    from jarvis.voice import AudioClip
+    from jarvis.adapters.audio.voice import AudioClip
 
     assert CompatAgent is JarvisAgent
     assert compat_main is main

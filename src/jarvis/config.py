@@ -1,67 +1,51 @@
 from __future__ import annotations
 
-import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from jarvis._env import (
+    env_optional_str_with_default,
+    env_bool,
+    env_choice,
+    env_float,
+    env_float_range,
+    env_int,
+    env_int_range,
+    env_optional_str,
+    env_path,
+    env_str,
+)
+
 try:
-    from dotenv import load_dotenv
+    from dotenv import load_dotenv as _load_dotenv
 except ImportError:  # pragma: no cover - dependency is installed in normal use
-    load_dotenv = None
+    _load_dotenv = None  # type: ignore[assignment]
+
+# Backward-compatible alias for test monkeypatching
+load_dotenv = _load_dotenv
 
 
 def _find_project_root(project_root: Path | None = None) -> Path:
     if project_root is not None:
         return project_root.expanduser().resolve()
 
-    configured_root = os.getenv("JARVIS_PROJECT_ROOT", "").strip()
+    configured_root = env_str("JARVIS_PROJECT_ROOT")
     if configured_root:
         return Path(configured_root).expanduser().resolve()
 
-    current = Path.cwd().resolve()
+    from pathlib import Path as P
+    current = P.cwd().resolve()
     for candidate in (current, *current.parents):
         if (candidate / "pyproject.toml").is_file():
             return candidate
 
-    source_file = Path(__file__).resolve()
+    source_file = P(__file__).resolve()
     for candidate in source_file.parents:
         if (candidate / "pyproject.toml").is_file():
             return candidate
 
     return current
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise ValueError(f"环境变量 {name} 必须是整数，实际为 {raw!r}") from exc
-
-
-def _env_float(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return float(raw)
-    except ValueError as exc:
-        raise ValueError(f"环境变量 {name} 必须是数字，实际为 {raw!r}") from exc
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"环境变量 {name} 必须是 true/false，实际为 {raw!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +57,11 @@ class ModelSettings:
     reasoning_effort: str | None
     timeout_seconds: float
     max_retries: int
+    rate_limit_rpm: int = 0  # 0 = disabled
+    rate_limit_burst: int = 10
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-sonnet-4-20250514"
+    enable_thinking: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +122,147 @@ class WakeSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class HealthSettings:
+    enabled: bool = False
+    port: int = 8080
+
+
+@dataclass(frozen=True, slots=True)
+class SkillSettings:
+    enabled: bool = False
+    skills_dir: str = "~/.jarvis/skills"
+
+
+@dataclass(frozen=True, slots=True)
+class MCPSettings:
+    enabled: bool = False
+    servers: tuple[str, ...] = ()  # list of "command arg1 arg2" strings
+
+
+def _load_model_settings(api_key: str | None, base_url: str | None) -> ModelSettings:
+    model = env_str("OPEN_MODEL") or env_str("JARVIS_MODEL") or "gpt-5.6-sol"
+    api_mode = env_choice("OPEN_API_MODE", "responses", {"responses", "chat_completions"})
+
+    reasoning_raw = env_optional_str("OPEN_REASONING_EFFORT", "JARVIS_REASONING_EFFORT")
+    if reasoning_raw is None:
+        reasoning_effort = "medium" if base_url is None else None
+    else:
+        reasoning_effort = reasoning_raw or None
+
+    return ModelSettings(
+        api_key=api_key,
+        base_url=base_url.rstrip("/") if base_url else None,
+        model=model,
+        api_mode=api_mode,
+        reasoning_effort=reasoning_effort,
+        timeout_seconds=env_float_range("OPEN_TIMEOUT_SECONDS", 60.0, 1, 600),
+        max_retries=env_int_range("OPEN_MAX_RETRIES", 2, 0, 10),
+        rate_limit_rpm=env_int_range("JARVIS_RATE_LIMIT_RPM", 0, 0, 10000),
+        rate_limit_burst=env_int_range("JARVIS_RATE_LIMIT_BURST", 10, 1, 100),
+        anthropic_api_key=env_optional_str("ANTHROPIC_API_KEY"),
+        anthropic_model=env_str("ANTHROPIC_MODEL", "claude-sonnet-4-20250514") or "claude-sonnet-4-20250514",
+        enable_thinking=env_bool("JARVIS_ENABLE_THINKING", False),
+    )
+
+
+def _load_storage_settings(root: Path) -> StorageSettings:
+    memory_root = env_path("JARVIS_MEMORY_ROOT", r"E:\CodexLib\Jarvis") or Path(r"E:\CodexLib\Jarvis")
+    memory_root = memory_root.expanduser().resolve()
+
+    db_raw = env_path("JARVIS_DB_PATH", "data/jarvis.db") or Path("data/jarvis.db")
+    db_path = (root / db_raw).resolve() if not db_raw.is_absolute() else db_raw.resolve()
+
+    return StorageSettings(db_path=db_path, memory_root=memory_root)
+
+
+def _load_safety_settings(root: Path, memory_root: Path) -> SafetySettings:
+    roots_raw = env_str("JARVIS_ALLOWED_ROOTS")
+    if roots_raw:
+        allowed = tuple(
+            Path(item.strip()).expanduser().resolve()
+            for item in roots_raw.split(";")
+            if item.strip()
+        )
+    else:
+        allowed = (root, memory_root)
+
+    return SafetySettings(
+        allowed_roots=allowed,
+        auto_approve_level=env_int_range("JARVIS_AUTO_APPROVE_LEVEL", 1, 0, 3),
+        max_tool_rounds=env_int_range("JARVIS_MAX_TOOL_ROUNDS", 6, 1, 20),
+    )
+
+
+def _load_desktop_settings() -> DesktopSettings:
+    applications_raw = env_str(
+        "JARVIS_ALLOWED_APPLICATIONS",
+        "记事本;计算器;文件资源管理器;设置;画图;终端;Obsidian;Google Chrome;Microsoft Edge;ChatGPT",
+    )
+    allowed_applications = tuple(
+        dict.fromkeys(
+            item.strip() for item in applications_raw.split(";") if item.strip()
+        )
+    )
+
+    op_timeout = env_float_range("JARVIS_DESKTOP_OPERATION_TIMEOUT_SECONDS", 10.0, 1, 120)
+
+    screenshot_temp_raw = env_str("JARVIS_DESKTOP_SCREENSHOT_TEMP_DIR")
+    if screenshot_temp_raw:
+        screenshot_temp_dir = Path(screenshot_temp_raw).expanduser()
+    else:
+        screenshot_temp_dir = Path(tempfile.gettempdir()) / "jarvis-screenshots"
+
+    return DesktopSettings(
+        allowed_applications=allowed_applications,
+        control_enabled=env_bool("JARVIS_DESKTOP_CONTROL_ENABLED", False),
+        snapshot_max_nodes=env_int_range("JARVIS_DESKTOP_SNAPSHOT_MAX_NODES", 200, 10, 2000),
+        snapshot_max_depth=env_int_range("JARVIS_DESKTOP_SNAPSHOT_MAX_DEPTH", 8, 1, 32),
+        snapshot_max_text_length=env_int_range("JARVIS_DESKTOP_SNAPSHOT_MAX_TEXT_LENGTH", 200, 20, 2000),
+        snapshot_ttl_seconds=env_float_range("JARVIS_DESKTOP_SNAPSHOT_TTL_SECONDS", 30.0, 1, 300),
+        operation_timeout_seconds=op_timeout,
+        observation_timeout_seconds=env_float_range("JARVIS_DESKTOP_OBSERVATION_TIMEOUT_SECONDS", op_timeout, 1, 120),
+        focus_timeout_seconds=env_float_range("JARVIS_DESKTOP_FOCUS_TIMEOUT_SECONDS", op_timeout, 1, 120),
+        action_timeout_seconds=env_float_range("JARVIS_DESKTOP_ACTION_TIMEOUT_SECONDS", op_timeout, 1, 120),
+        input_max_text_length=env_int_range("JARVIS_DESKTOP_INPUT_MAX_TEXT_LENGTH", 4000, 1, 20000),
+        screenshot_max_width=env_int_range("JARVIS_DESKTOP_SCREENSHOT_MAX_WIDTH", 1920, 100, 7680),
+        screenshot_max_height=env_int_range("JARVIS_DESKTOP_SCREENSHOT_MAX_HEIGHT", 1080, 100, 4320),
+        screenshot_ttl_seconds=env_float_range("JARVIS_DESKTOP_SCREENSHOT_TTL_SECONDS", 60.0, 5, 3600),
+        screenshot_temp_dir=screenshot_temp_dir,
+        vision_enabled=env_bool("JARVIS_DESKTOP_VISION_ENABLED", False),
+    )
+
+
+def _load_voice_settings(api_key: str | None, base_url: str | None) -> VoiceSettings:
+    stt_base_url_raw = env_optional_str("OPEN_STT_BASE_URL")
+    stt_base_url = stt_base_url_raw or (base_url.rstrip("/") if base_url else None)
+    if stt_base_url:
+        stt_base_url = stt_base_url.rstrip("/")
+
+    return VoiceSettings(
+        stt_api_key=env_optional_str("OPEN_STT_API_KEY") or api_key,
+        stt_base_url=stt_base_url,
+        stt_model=env_str("OPEN_STT_MODEL", "whisper-1") or "whisper-1",
+        stt_language=env_optional_str_with_default("OPEN_STT_LANGUAGE", "zh"),
+        sample_rate=env_int_range("JARVIS_VOICE_SAMPLE_RATE", 16000, 8000, 48000),
+        max_seconds=env_float_range("JARVIS_VOICE_MAX_SECONDS", 60.0, 1, 600),
+        tts_enabled=env_bool("JARVIS_TTS_ENABLED", True),
+        tts_rate=env_int_range("JARVIS_TTS_RATE", 190, 80, 400),
+        tts_voice=env_optional_str("JARVIS_TTS_VOICE"),
+    )
+
+def _load_wake_settings() -> WakeSettings:
+    return WakeSettings(
+        model=env_str("JARVIS_WAKE_MODEL", "hey_jarvis") or "hey_jarvis",
+        threshold=env_float_range("JARVIS_WAKE_THRESHOLD", 0.5, 0.05, 0.99),
+        vad_mode=env_int_range("JARVIS_VAD_MODE", 2, 0, 3),
+        vad_silence_ms=env_int_range("JARVIS_VAD_SILENCE_MS", 900, 300, 5000),
+        vad_start_timeout_seconds=env_float_range("JARVIS_VAD_START_TIMEOUT_SECONDS", 8.0, 1, 60),
+        vad_max_seconds=env_float_range("JARVIS_VAD_MAX_SECONDS", 30.0, 2, 120),
+        vad_min_speech_ms=env_int_range("JARVIS_VAD_MIN_SPEECH_MS", 300, 100, 3000),
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     assistant_name: str
     max_history_items: int
@@ -142,182 +272,9 @@ class Settings:
     desktop_settings: DesktopSettings
     voice_settings: VoiceSettings
     wake_settings: WakeSettings
-
-    @property
-    def api_key(self) -> str | None:
-        return self.model_settings.api_key
-
-    @property
-    def base_url(self) -> str | None:
-        return self.model_settings.base_url
-
-    @property
-    def model(self) -> str:
-        return self.model_settings.model
-
-    @property
-    def api_mode(self) -> str:
-        return self.model_settings.api_mode
-
-    @property
-    def reasoning_effort(self) -> str | None:
-        return self.model_settings.reasoning_effort
-
-    @property
-    def request_timeout_seconds(self) -> float:
-        return self.model_settings.timeout_seconds
-
-    @property
-    def max_retries(self) -> int:
-        return self.model_settings.max_retries
-
-    @property
-    def db_path(self) -> Path:
-        return self.storage_settings.db_path
-
-    @property
-    def memory_root(self) -> Path:
-        return self.storage_settings.memory_root
-
-    @property
-    def allowed_roots(self) -> tuple[Path, ...]:
-        return self.safety_settings.allowed_roots
-
-    @property
-    def auto_approve_level(self) -> int:
-        return self.safety_settings.auto_approve_level
-
-    @property
-    def max_tool_rounds(self) -> int:
-        return self.safety_settings.max_tool_rounds
-
-    @property
-    def allowed_applications(self) -> tuple[str, ...]:
-        return self.desktop_settings.allowed_applications
-
-    @property
-    def desktop_control_enabled(self) -> bool:
-        return self.desktop_settings.control_enabled
-
-    @property
-    def desktop_snapshot_max_nodes(self) -> int:
-        return self.desktop_settings.snapshot_max_nodes
-
-    @property
-    def desktop_snapshot_max_depth(self) -> int:
-        return self.desktop_settings.snapshot_max_depth
-
-    @property
-    def desktop_snapshot_max_text_length(self) -> int:
-        return self.desktop_settings.snapshot_max_text_length
-
-    @property
-    def desktop_snapshot_ttl_seconds(self) -> float:
-        return self.desktop_settings.snapshot_ttl_seconds
-
-    @property
-    def desktop_operation_timeout_seconds(self) -> float:
-        return self.desktop_settings.operation_timeout_seconds
-
-    @property
-    def desktop_observation_timeout_seconds(self) -> float:
-        return self.desktop_settings.observation_timeout_seconds
-
-    @property
-    def desktop_focus_timeout_seconds(self) -> float:
-        return self.desktop_settings.focus_timeout_seconds
-
-    @property
-    def desktop_action_timeout_seconds(self) -> float:
-        return self.desktop_settings.action_timeout_seconds
-
-    @property
-    def desktop_input_max_text_length(self) -> int:
-        return self.desktop_settings.input_max_text_length
-
-    @property
-    def desktop_screenshot_max_width(self) -> int:
-        return self.desktop_settings.screenshot_max_width
-
-    @property
-    def desktop_screenshot_max_height(self) -> int:
-        return self.desktop_settings.screenshot_max_height
-
-    @property
-    def desktop_screenshot_ttl_seconds(self) -> float:
-        return self.desktop_settings.screenshot_ttl_seconds
-
-    @property
-    def desktop_screenshot_temp_dir(self) -> Path:
-        return self.desktop_settings.screenshot_temp_dir
-
-    @property
-    def desktop_vision_enabled(self) -> bool:
-        return self.desktop_settings.vision_enabled
-
-    @property
-    def stt_api_key(self) -> str | None:
-        return self.voice_settings.stt_api_key
-
-    @property
-    def stt_base_url(self) -> str | None:
-        return self.voice_settings.stt_base_url
-
-    @property
-    def stt_model(self) -> str:
-        return self.voice_settings.stt_model
-
-    @property
-    def stt_language(self) -> str | None:
-        return self.voice_settings.stt_language
-
-    @property
-    def voice_sample_rate(self) -> int:
-        return self.voice_settings.sample_rate
-
-    @property
-    def voice_max_seconds(self) -> float:
-        return self.voice_settings.max_seconds
-
-    @property
-    def tts_enabled(self) -> bool:
-        return self.voice_settings.tts_enabled
-
-    @property
-    def tts_rate(self) -> int:
-        return self.voice_settings.tts_rate
-
-    @property
-    def tts_voice(self) -> str | None:
-        return self.voice_settings.tts_voice
-
-    @property
-    def wake_model(self) -> str:
-        return self.wake_settings.model
-
-    @property
-    def wake_threshold(self) -> float:
-        return self.wake_settings.threshold
-
-    @property
-    def vad_mode(self) -> int:
-        return self.wake_settings.vad_mode
-
-    @property
-    def vad_silence_ms(self) -> int:
-        return self.wake_settings.vad_silence_ms
-
-    @property
-    def vad_start_timeout_seconds(self) -> float:
-        return self.wake_settings.vad_start_timeout_seconds
-
-    @property
-    def vad_max_seconds(self) -> float:
-        return self.wake_settings.vad_max_seconds
-
-    @property
-    def vad_min_speech_ms(self) -> int:
-        return self.wake_settings.vad_min_speech_ms
+    health_settings: HealthSettings
+    skill_settings: SkillSettings
+    mcp_settings: MCPSettings
 
     @classmethod
     def load(cls, project_root: Path | None = None) -> "Settings":
@@ -325,256 +282,40 @@ class Settings:
         if load_dotenv is not None:
             load_dotenv(root / ".env")
 
-        memory_root = Path(
-            os.getenv("JARVIS_MEMORY_ROOT", r"E:\CodexLib\Jarvis")
-        ).expanduser().resolve()
-        db_raw = Path(os.getenv("JARVIS_DB_PATH", "data/jarvis.db")).expanduser()
-        db_path = (root / db_raw).resolve() if not db_raw.is_absolute() else db_raw.resolve()
+        api_key = env_optional_str("OPEN_API_KEY", "OPENAI_API_KEY")
+        base_url = env_optional_str("OPEN_BASE_URL", "OPENAI_BASE_URL")
 
-        roots_raw = os.getenv("JARVIS_ALLOWED_ROOTS", "")
-        if roots_raw.strip():
-            allowed = tuple(
-                Path(item.strip()).expanduser().resolve()
-                for item in roots_raw.split(";")
-                if item.strip()
-            )
-        else:
-            allowed = (root, memory_root)
-
-        applications_raw = os.getenv(
-            "JARVIS_ALLOWED_APPLICATIONS",
-            "记事本;计算器;文件资源管理器;设置;画图;终端;Obsidian;Google Chrome;Microsoft Edge;ChatGPT",
+        model = _load_model_settings(api_key, base_url)
+        storage = _load_storage_settings(root)
+        safety = _load_safety_settings(root, storage.memory_root)
+        desktop = _load_desktop_settings()
+        voice = _load_voice_settings(api_key, base_url)
+        wake = _load_wake_settings()
+        health = HealthSettings(
+            enabled=env_bool("JARVIS_HEALTH_ENABLED", False),
+            port=env_int_range("JARVIS_HEALTH_PORT", 8080, 1024, 65535),
         )
-        allowed_applications = tuple(
-            dict.fromkeys(
-                item.strip() for item in applications_raw.split(";") if item.strip()
-            )
+        skill = SkillSettings(
+            enabled=env_bool("JARVIS_SKILL_ENABLED", False),
+            skills_dir=env_str("JARVIS_SKILLS_DIR", "~/.jarvis/skills") or "~/.jarvis/skills",
         )
-
-        snapshot_max_nodes = _env_int("JARVIS_DESKTOP_SNAPSHOT_MAX_NODES", 200)
-        if not 10 <= snapshot_max_nodes <= 2000:
-            raise ValueError("JARVIS_DESKTOP_SNAPSHOT_MAX_NODES 必须在 10 到 2000 之间")
-
-        snapshot_max_depth = _env_int("JARVIS_DESKTOP_SNAPSHOT_MAX_DEPTH", 8)
-        if not 1 <= snapshot_max_depth <= 32:
-            raise ValueError("JARVIS_DESKTOP_SNAPSHOT_MAX_DEPTH 必须在 1 到 32 之间")
-
-        snapshot_max_text_length = _env_int(
-            "JARVIS_DESKTOP_SNAPSHOT_MAX_TEXT_LENGTH", 200
+        mcp = MCPSettings(
+            enabled=env_bool("JARVIS_MCP_ENABLED", False),
+            servers=tuple(
+                s.strip() for s in env_str("JARVIS_MCP_SERVERS", "").split(";") if s.strip()
+            ),
         )
-        if not 20 <= snapshot_max_text_length <= 2000:
-            raise ValueError(
-                "JARVIS_DESKTOP_SNAPSHOT_MAX_TEXT_LENGTH 必须在 20 到 2000 之间"
-            )
-
-        snapshot_ttl_seconds = _env_float(
-            "JARVIS_DESKTOP_SNAPSHOT_TTL_SECONDS", 30.0
-        )
-        if not 1 <= snapshot_ttl_seconds <= 300:
-            raise ValueError("JARVIS_DESKTOP_SNAPSHOT_TTL_SECONDS 必须在 1 到 300 之间")
-
-        desktop_operation_timeout = _env_float(
-            "JARVIS_DESKTOP_OPERATION_TIMEOUT_SECONDS", 10.0
-        )
-        if not 1 <= desktop_operation_timeout <= 120:
-            raise ValueError(
-                "JARVIS_DESKTOP_OPERATION_TIMEOUT_SECONDS 必须在 1 到 120 之间"
-            )
-
-        desktop_observation_timeout = _env_float(
-            "JARVIS_DESKTOP_OBSERVATION_TIMEOUT_SECONDS",
-            desktop_operation_timeout,
-        )
-        if not 1 <= desktop_observation_timeout <= 120:
-            raise ValueError(
-                "JARVIS_DESKTOP_OBSERVATION_TIMEOUT_SECONDS 必须在 1 到 120 之间"
-            )
-
-        desktop_focus_timeout = _env_float(
-            "JARVIS_DESKTOP_FOCUS_TIMEOUT_SECONDS",
-            desktop_operation_timeout,
-        )
-        if not 1 <= desktop_focus_timeout <= 120:
-            raise ValueError(
-                "JARVIS_DESKTOP_FOCUS_TIMEOUT_SECONDS 必须在 1 到 120 之间"
-            )
-
-        desktop_action_timeout = _env_float(
-            "JARVIS_DESKTOP_ACTION_TIMEOUT_SECONDS",
-            desktop_operation_timeout,
-        )
-        if not 1 <= desktop_action_timeout <= 120:
-            raise ValueError(
-                "JARVIS_DESKTOP_ACTION_TIMEOUT_SECONDS 必须在 1 到 120 之间"
-            )
-
-        input_max_text_length = _env_int(
-            "JARVIS_DESKTOP_INPUT_MAX_TEXT_LENGTH", 4000
-        )
-        if not 1 <= input_max_text_length <= 20000:
-            raise ValueError(
-                "JARVIS_DESKTOP_INPUT_MAX_TEXT_LENGTH 必须在 1 到 20000 之间"
-            )
-
-        screenshot_max_width = _env_int("JARVIS_DESKTOP_SCREENSHOT_MAX_WIDTH", 1920)
-        if not 100 <= screenshot_max_width <= 7680:
-            raise ValueError(
-                "JARVIS_DESKTOP_SCREENSHOT_MAX_WIDTH 必须在 100 到 7680 之间"
-            )
-
-        screenshot_max_height = _env_int(
-            "JARVIS_DESKTOP_SCREENSHOT_MAX_HEIGHT", 1080
-        )
-        if not 100 <= screenshot_max_height <= 4320:
-            raise ValueError(
-                "JARVIS_DESKTOP_SCREENSHOT_MAX_HEIGHT 必须在 100 到 4320 之间"
-            )
-
-        screenshot_ttl_seconds = _env_float(
-            "JARVIS_DESKTOP_SCREENSHOT_TTL_SECONDS", 60.0
-        )
-        if not 5 <= screenshot_ttl_seconds <= 3600:
-            raise ValueError(
-                "JARVIS_DESKTOP_SCREENSHOT_TTL_SECONDS 必须在 5 到 3600 之间"
-            )
-
-        screenshot_temp_dir_raw = os.getenv("JARVIS_DESKTOP_SCREENSHOT_TEMP_DIR")
-        screenshot_temp_dir = Path(
-            screenshot_temp_dir_raw.strip()
-            if screenshot_temp_dir_raw and screenshot_temp_dir_raw.strip()
-            else str(Path(tempfile.gettempdir()) / "jarvis-screenshots")
-        ).expanduser()
-
-        auto_approve = _env_int("JARVIS_AUTO_APPROVE_LEVEL", 1)
-        if not 0 <= auto_approve <= 3:
-            raise ValueError("JARVIS_AUTO_APPROVE_LEVEL 必须在 0 到 3 之间")
-
-        max_rounds = _env_int("JARVIS_MAX_TOOL_ROUNDS", 6)
-        if not 1 <= max_rounds <= 20:
-            raise ValueError("JARVIS_MAX_TOOL_ROUNDS 必须在 1 到 20 之间")
-
-        timeout_seconds = _env_float("OPEN_TIMEOUT_SECONDS", 60.0)
-        if not 1 <= timeout_seconds <= 600:
-            raise ValueError("OPEN_TIMEOUT_SECONDS 必须在 1 到 600 之间")
-
-        max_retries = _env_int("OPEN_MAX_RETRIES", 2)
-        if not 0 <= max_retries <= 10:
-            raise ValueError("OPEN_MAX_RETRIES 必须在 0 到 10 之间")
-
-        max_history_items = _env_int("JARVIS_MAX_HISTORY_ITEMS", 120)
-        if not 10 <= max_history_items <= 2000:
-            raise ValueError("JARVIS_MAX_HISTORY_ITEMS 必须在 10 到 2000 之间")
-
-        voice_sample_rate = _env_int("JARVIS_VOICE_SAMPLE_RATE", 16000)
-        if not 8000 <= voice_sample_rate <= 48000:
-            raise ValueError("JARVIS_VOICE_SAMPLE_RATE 必须在 8000 到 48000 之间")
-
-        voice_max_seconds = _env_float("JARVIS_VOICE_MAX_SECONDS", 60.0)
-        if not 1 <= voice_max_seconds <= 600:
-            raise ValueError("JARVIS_VOICE_MAX_SECONDS 必须在 1 到 600 之间")
-
-        tts_rate = _env_int("JARVIS_TTS_RATE", 190)
-        if not 80 <= tts_rate <= 400:
-            raise ValueError("JARVIS_TTS_RATE 必须在 80 到 400 之间")
-
-        wake_threshold = _env_float("JARVIS_WAKE_THRESHOLD", 0.5)
-        if not 0.05 <= wake_threshold <= 0.99:
-            raise ValueError("JARVIS_WAKE_THRESHOLD 必须在 0.05 到 0.99 之间")
-
-        vad_mode = _env_int("JARVIS_VAD_MODE", 2)
-        if not 0 <= vad_mode <= 3:
-            raise ValueError("JARVIS_VAD_MODE 必须在 0 到 3 之间")
-
-        vad_silence_ms = _env_int("JARVIS_VAD_SILENCE_MS", 900)
-        if not 300 <= vad_silence_ms <= 5000:
-            raise ValueError("JARVIS_VAD_SILENCE_MS 必须在 300 到 5000 之间")
-
-        vad_start_timeout = _env_float("JARVIS_VAD_START_TIMEOUT_SECONDS", 8.0)
-        if not 1 <= vad_start_timeout <= 60:
-            raise ValueError("JARVIS_VAD_START_TIMEOUT_SECONDS 必须在 1 到 60 之间")
-
-        vad_max_seconds = _env_float("JARVIS_VAD_MAX_SECONDS", 30.0)
-        if not 2 <= vad_max_seconds <= 120:
-            raise ValueError("JARVIS_VAD_MAX_SECONDS 必须在 2 到 120 之间")
-
-        vad_min_speech_ms = _env_int("JARVIS_VAD_MIN_SPEECH_MS", 300)
-        if not 100 <= vad_min_speech_ms <= 3000:
-            raise ValueError("JARVIS_VAD_MIN_SPEECH_MS 必须在 100 到 3000 之间")
-
-        api_key = os.getenv("OPEN_API_KEY") or os.getenv("OPENAI_API_KEY") or None
-        base_url = os.getenv("OPEN_BASE_URL") or os.getenv("OPENAI_BASE_URL") or None
-        model = os.getenv("OPEN_MODEL") or os.getenv("JARVIS_MODEL") or "gpt-5.6-sol"
-        api_mode = (os.getenv("OPEN_API_MODE") or "responses").strip().lower()
-        if api_mode not in {"responses", "chat_completions"}:
-            raise ValueError("OPEN_API_MODE 必须是 responses 或 chat_completions")
-
-        reasoning_raw = os.getenv("OPEN_REASONING_EFFORT")
-        if reasoning_raw is None:
-            reasoning_raw = os.getenv("JARVIS_REASONING_EFFORT")
-        if reasoning_raw is None:
-            reasoning_effort = "medium" if base_url is None else None
-        else:
-            reasoning_effort = reasoning_raw.strip() or None
 
         return cls(
-            assistant_name=os.getenv("JARVIS_NAME", "贾维斯"),
-            max_history_items=max_history_items,
-            model_settings=ModelSettings(
-                api_key=api_key,
-                base_url=base_url.rstrip("/") if base_url else None,
-                model=model,
-                api_mode=api_mode,
-                reasoning_effort=reasoning_effort,
-                timeout_seconds=timeout_seconds,
-                max_retries=max_retries,
-            ),
-            storage_settings=StorageSettings(db_path=db_path, memory_root=memory_root),
-            safety_settings=SafetySettings(
-                allowed_roots=allowed,
-                auto_approve_level=auto_approve,
-                max_tool_rounds=max_rounds,
-            ),
-            desktop_settings=DesktopSettings(
-                allowed_applications=allowed_applications,
-                control_enabled=_env_bool("JARVIS_DESKTOP_CONTROL_ENABLED", False),
-                snapshot_max_nodes=snapshot_max_nodes,
-                snapshot_max_depth=snapshot_max_depth,
-                snapshot_max_text_length=snapshot_max_text_length,
-                snapshot_ttl_seconds=snapshot_ttl_seconds,
-                operation_timeout_seconds=desktop_operation_timeout,
-                observation_timeout_seconds=desktop_observation_timeout,
-                focus_timeout_seconds=desktop_focus_timeout,
-                action_timeout_seconds=desktop_action_timeout,
-                input_max_text_length=input_max_text_length,
-                screenshot_max_width=screenshot_max_width,
-                screenshot_max_height=screenshot_max_height,
-                screenshot_ttl_seconds=screenshot_ttl_seconds,
-                screenshot_temp_dir=screenshot_temp_dir,
-                vision_enabled=_env_bool("JARVIS_DESKTOP_VISION_ENABLED", False),
-            ),
-            voice_settings=VoiceSettings(
-                stt_api_key=os.getenv("OPEN_STT_API_KEY") or api_key,
-                stt_base_url=(
-                    os.getenv("OPEN_STT_BASE_URL") or base_url or ""
-                ).rstrip("/")
-                or None,
-                stt_model=os.getenv("OPEN_STT_MODEL", "whisper-1").strip()
-                or "whisper-1",
-                stt_language=os.getenv("OPEN_STT_LANGUAGE", "zh").strip() or None,
-                sample_rate=voice_sample_rate,
-                max_seconds=voice_max_seconds,
-                tts_enabled=_env_bool("JARVIS_TTS_ENABLED", True),
-                tts_rate=tts_rate,
-                tts_voice=os.getenv("JARVIS_TTS_VOICE", "").strip() or None,
-            ),
-            wake_settings=WakeSettings(
-                model=os.getenv("JARVIS_WAKE_MODEL", "hey_jarvis").strip()
-                or "hey_jarvis",
-                threshold=wake_threshold,
-                vad_mode=vad_mode,
-                vad_silence_ms=vad_silence_ms,
-                vad_start_timeout_seconds=vad_start_timeout,
-                vad_max_seconds=vad_max_seconds,
-                vad_min_speech_ms=vad_min_speech_ms,
-            ),
+            assistant_name=env_str("JARVIS_NAME", "贾维斯") or "贾维斯",
+            max_history_items=env_int_range("JARVIS_MAX_HISTORY_ITEMS", 120, 10, 2000),
+            model_settings=model,
+            storage_settings=storage,
+            safety_settings=safety,
+            desktop_settings=desktop,
+            voice_settings=voice,
+            wake_settings=wake,
+            health_settings=health,
+            skill_settings=skill,
+            mcp_settings=mcp,
         )

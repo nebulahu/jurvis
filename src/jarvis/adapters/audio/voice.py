@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
-from jarvis.application.voice_session import VoiceSession, VoiceState, VoiceStateMachine
+from jarvis.application.voice_session import VoiceState, VoiceStateMachine  # re-export
 from jarvis.config import ModelSettings, VoiceSettings
 from jarvis.ports.audio import AudioClip, Speaker, Transcriber, VoiceError
 

@@ -64,50 +64,50 @@ def test_custom_open_compatible_settings(monkeypatch, tmp_path: Path) -> None:
 
     settings = Settings.load(tmp_path)
 
-    assert settings.api_key == "custom-key"
-    assert settings.base_url == "http://localhost:11434/v1"
-    assert settings.model == "local-model"
-    assert settings.api_mode == "chat_completions"
-    assert settings.reasoning_effort is None
-    assert settings.request_timeout_seconds == 60
-    assert settings.max_retries == 2
+    assert settings.model_settings.api_key == "custom-key"
+    assert settings.model_settings.base_url == "http://localhost:11434/v1"
+    assert settings.model_settings.model == "local-model"
+    assert settings.model_settings.api_mode == "chat_completions"
+    assert settings.model_settings.reasoning_effort is None
+    assert settings.model_settings.timeout_seconds == 60
+    assert settings.model_settings.max_retries == 2
     assert settings.max_history_items == 120
-    assert "记事本" in settings.allowed_applications
-    assert "ChatGPT" in settings.allowed_applications
-    assert settings.stt_api_key == "custom-key"
-    assert settings.stt_base_url == "http://localhost:11434/v1"
-    assert settings.stt_model == "whisper-1"
-    assert settings.stt_language == "zh"
-    assert settings.voice_sample_rate == 16000
-    assert settings.voice_max_seconds == 60
-    assert settings.tts_enabled
-    assert settings.tts_rate == 190
-    assert settings.wake_model == "hey_jarvis"
-    assert settings.wake_threshold == 0.5
-    assert settings.vad_mode == 2
-    assert settings.vad_silence_ms == 900
-    assert settings.vad_start_timeout_seconds == 8
-    assert settings.vad_max_seconds == 30
-    assert settings.vad_min_speech_ms == 300
+    assert "记事本" in settings.desktop_settings.allowed_applications
+    assert "ChatGPT" in settings.desktop_settings.allowed_applications
+    assert settings.voice_settings.stt_api_key == "custom-key"
+    assert settings.voice_settings.stt_base_url == "http://localhost:11434/v1"
+    assert settings.voice_settings.stt_model == "whisper-1"
+    assert settings.voice_settings.stt_language == "zh"
+    assert settings.voice_settings.sample_rate == 16000
+    assert settings.voice_settings.max_seconds == 60
+    assert settings.voice_settings.tts_enabled
+    assert settings.voice_settings.tts_rate == 190
+    assert settings.wake_settings.model == "hey_jarvis"
+    assert settings.wake_settings.threshold == 0.5
+    assert settings.wake_settings.vad_mode == 2
+    assert settings.wake_settings.vad_silence_ms == 900
+    assert settings.wake_settings.vad_start_timeout_seconds == 8
+    assert settings.wake_settings.vad_max_seconds == 30
+    assert settings.wake_settings.vad_min_speech_ms == 300
     assert settings.model_settings.model == "local-model"
     assert settings.storage_settings.db_path == (tmp_path / "data" / "jarvis.db")
     assert settings.safety_settings.max_tool_rounds == 6
-    assert settings.desktop_settings.allowed_applications == settings.allowed_applications
-    assert not settings.desktop_control_enabled
-    assert settings.desktop_snapshot_max_nodes == 200
-    assert settings.desktop_snapshot_max_depth == 8
-    assert settings.desktop_snapshot_max_text_length == 200
-    assert settings.desktop_snapshot_ttl_seconds == 30
-    assert settings.desktop_operation_timeout_seconds == 10
-    assert settings.desktop_observation_timeout_seconds == 10
-    assert settings.desktop_focus_timeout_seconds == 10
-    assert settings.desktop_action_timeout_seconds == 10
-    assert settings.desktop_input_max_text_length == 4000
-    assert settings.desktop_screenshot_max_width == 1920
-    assert settings.desktop_screenshot_max_height == 1080
-    assert settings.desktop_screenshot_ttl_seconds == 60
-    assert settings.desktop_screenshot_temp_dir.name == "jarvis-screenshots"
-    assert not settings.desktop_vision_enabled
+    assert settings.desktop_settings.allowed_applications == settings.desktop_settings.allowed_applications
+    assert not settings.desktop_settings.control_enabled
+    assert settings.desktop_settings.snapshot_max_nodes == 200
+    assert settings.desktop_settings.snapshot_max_depth == 8
+    assert settings.desktop_settings.snapshot_max_text_length == 200
+    assert settings.desktop_settings.snapshot_ttl_seconds == 30
+    assert settings.desktop_settings.operation_timeout_seconds == 10
+    assert settings.desktop_settings.observation_timeout_seconds == 10
+    assert settings.desktop_settings.focus_timeout_seconds == 10
+    assert settings.desktop_settings.action_timeout_seconds == 10
+    assert settings.desktop_settings.input_max_text_length == 4000
+    assert settings.desktop_settings.screenshot_max_width == 1920
+    assert settings.desktop_settings.screenshot_max_height == 1080
+    assert settings.desktop_settings.screenshot_ttl_seconds == 60
+    assert settings.desktop_settings.screenshot_temp_dir.name == "jarvis-screenshots"
+    assert not settings.desktop_settings.vision_enabled
     assert settings.voice_settings.sample_rate == 16000
     assert settings.wake_settings.model == "hey_jarvis"
 
@@ -120,10 +120,10 @@ def test_legacy_openai_environment_variables_still_work(monkeypatch, tmp_path: P
 
     settings = Settings.load(tmp_path)
 
-    assert settings.api_key == "legacy-key"
-    assert settings.model == "legacy-model"
-    assert settings.api_mode == "responses"
-    assert settings.reasoning_effort == "medium"
+    assert settings.model_settings.api_key == "legacy-key"
+    assert settings.model_settings.model == "legacy-model"
+    assert settings.model_settings.api_mode == "responses"
+    assert settings.model_settings.reasoning_effort == "medium"
 
 
 def test_voice_settings_can_use_a_separate_stt_service(monkeypatch, tmp_path: Path) -> None:
@@ -149,22 +149,22 @@ def test_voice_settings_can_use_a_separate_stt_service(monkeypatch, tmp_path: Pa
 
     settings = Settings.load(tmp_path)
 
-    assert settings.stt_api_key == "speech-key"
-    assert settings.stt_base_url == "http://localhost:9000/v1"
-    assert settings.stt_model == "whisper-large-v3"
-    assert settings.stt_language is None
-    assert settings.voice_sample_rate == 24000
-    assert settings.voice_max_seconds == 45
-    assert not settings.tts_enabled
-    assert settings.tts_rate == 210
-    assert settings.tts_voice == "Xiaoxiao"
-    assert settings.wake_model == "custom.onnx"
-    assert settings.wake_threshold == 0.65
-    assert settings.vad_mode == 3
-    assert settings.vad_silence_ms == 1200
-    assert settings.vad_start_timeout_seconds == 12
-    assert settings.vad_max_seconds == 40
-    assert settings.vad_min_speech_ms == 450
+    assert settings.voice_settings.stt_api_key == "speech-key"
+    assert settings.voice_settings.stt_base_url == "http://localhost:9000/v1"
+    assert settings.voice_settings.stt_model == "whisper-large-v3"
+    assert settings.voice_settings.stt_language is None
+    assert settings.voice_settings.sample_rate == 24000
+    assert settings.voice_settings.max_seconds == 45
+    assert not settings.voice_settings.tts_enabled
+    assert settings.voice_settings.tts_rate == 210
+    assert settings.voice_settings.tts_voice == "Xiaoxiao"
+    assert settings.wake_settings.model == "custom.onnx"
+    assert settings.wake_settings.threshold == 0.65
+    assert settings.wake_settings.vad_mode == 3
+    assert settings.wake_settings.vad_silence_ms == 1200
+    assert settings.wake_settings.vad_start_timeout_seconds == 12
+    assert settings.wake_settings.vad_max_seconds == 40
+    assert settings.wake_settings.vad_min_speech_ms == 450
 
 
 def test_allowed_applications_are_configurable(monkeypatch, tmp_path: Path) -> None:
@@ -174,7 +174,7 @@ def test_allowed_applications_are_configurable(monkeypatch, tmp_path: Path) -> N
 
     settings = Settings.load(tmp_path)
 
-    assert settings.allowed_applications == ("Obsidian", "Codex")
+    assert settings.desktop_settings.allowed_applications == ("Obsidian", "Codex")
 
 
 def test_desktop_control_limits_are_configurable(monkeypatch, tmp_path: Path) -> None:
@@ -198,22 +198,22 @@ def test_desktop_control_limits_are_configurable(monkeypatch, tmp_path: Path) ->
 
     settings = Settings.load(tmp_path)
 
-    assert settings.desktop_control_enabled
-    assert settings.desktop_snapshot_max_nodes == 64
-    assert settings.desktop_snapshot_max_depth == 6
-    assert settings.desktop_snapshot_max_text_length == 120
-    assert settings.desktop_snapshot_ttl_seconds == 12.5
-    assert settings.desktop_operation_timeout_seconds == 3.5
-    assert settings.desktop_observation_timeout_seconds == 4.5
-    assert settings.desktop_focus_timeout_seconds == 5.5
-    assert settings.desktop_action_timeout_seconds == 6.5
-    assert settings.desktop_input_max_text_length == 128
-    assert settings.desktop_screenshot_max_width == 1024
-    assert settings.desktop_screenshot_max_height == 768
-    assert settings.desktop_screenshot_ttl_seconds == 30
-    assert settings.desktop_screenshot_temp_dir == tmp_path / "shots"
-    assert settings.desktop_vision_enabled
-    assert "记事本" in settings.allowed_applications
+    assert settings.desktop_settings.control_enabled
+    assert settings.desktop_settings.snapshot_max_nodes == 64
+    assert settings.desktop_settings.snapshot_max_depth == 6
+    assert settings.desktop_settings.snapshot_max_text_length == 120
+    assert settings.desktop_settings.snapshot_ttl_seconds == 12.5
+    assert settings.desktop_settings.operation_timeout_seconds == 3.5
+    assert settings.desktop_settings.observation_timeout_seconds == 4.5
+    assert settings.desktop_settings.focus_timeout_seconds == 5.5
+    assert settings.desktop_settings.action_timeout_seconds == 6.5
+    assert settings.desktop_settings.input_max_text_length == 128
+    assert settings.desktop_settings.screenshot_max_width == 1024
+    assert settings.desktop_settings.screenshot_max_height == 768
+    assert settings.desktop_settings.screenshot_ttl_seconds == 30
+    assert settings.desktop_settings.screenshot_temp_dir == tmp_path / "shots"
+    assert settings.desktop_settings.vision_enabled
+    assert "记事本" in settings.desktop_settings.allowed_applications
 
 
 @pytest.mark.parametrize(
@@ -258,7 +258,7 @@ def test_default_load_finds_editable_project_root_from_another_directory(
 
     project_root = Path(__file__).resolve().parents[1]
     assert loaded_dotenv == [project_root / ".env"]
-    assert settings.db_path == project_root / "data" / "jarvis.db"
+    assert settings.storage_settings.db_path == project_root / "data" / "jarvis.db"
 
 
 def test_project_root_environment_override_has_priority(monkeypatch, tmp_path: Path) -> None:
@@ -273,4 +273,4 @@ def test_project_root_environment_override_has_priority(monkeypatch, tmp_path: P
     settings = Settings.load()
 
     assert loaded_dotenv == [configured_root / ".env"]
-    assert settings.db_path == configured_root / "data" / "jarvis.db"
+    assert settings.storage_settings.db_path == configured_root / "data" / "jarvis.db"

@@ -4,7 +4,7 @@ import base64
 from time import perf_counter
 from typing import Any
 
-from jarvis.application.models import (
+from jarvis.ports.models import (
     ChatMessage,
     ConversationItem,
     ImageContent,
@@ -13,6 +13,7 @@ from jarvis.application.models import (
     TextContent,
     ToolCall,
     ToolResult,
+    _field,
     normalize_conversation_item,
 )
 from jarvis.ports.model import (
@@ -20,13 +21,8 @@ from jarvis.ports.model import (
     ProviderRequestError,
     ProviderStatus,
     TextDeltaCallback,
+    ThinkingDeltaCallback,
 )
-
-def _field(item: Any, name: str, default: Any = None) -> Any:
-    if isinstance(item, dict):
-        return item.get(name, default)
-    return getattr(item, name, default)
-
 
 def _create_client(
     api_key: str,
@@ -254,6 +250,7 @@ class OpenAICompatibleResponsesProvider(_ProviderBase):
         input_items: list[ConversationItem],
         tools: list[dict[str, Any]],
         on_text_delta: TextDeltaCallback | None = None,
+        on_thinking_delta: ThinkingDeltaCallback | None = None,
     ) -> ModelResponse:
         request: dict[str, Any] = {
             "model": self.model,
@@ -279,6 +276,11 @@ class OpenAICompatibleResponsesProvider(_ProviderBase):
                         delta = str(_field(event, "delta", ""))
                         if delta:
                             on_text_delta(delta)
+                    elif event_type == "response.reasoning_summary_text.delta":
+                        # 思维链输出
+                        delta = str(_field(event, "delta", ""))
+                        if delta and on_thinking_delta is not None:
+                            on_thinking_delta(delta)
                     elif event_type == "response.completed":
                         response = _field(event, "response")
                 if response is None:
@@ -445,6 +447,7 @@ class OpenAICompatibleChatProvider(_ProviderBase):
         input_items: list[ConversationItem],
         tools: list[dict[str, Any]],
         on_text_delta: TextDeltaCallback | None = None,
+        on_thinking_delta: ThinkingDeltaCallback | None = None,
     ) -> ModelResponse:
         request = {
             "model": self.model,
@@ -475,6 +478,9 @@ class OpenAICompatibleChatProvider(_ProviderBase):
                 input_tokens = 0
                 output_tokens = 0
                 response_model = self.model
+                # 思维链解析状态
+                in_thinking = False
+                thinking_buffer = ""
                 for chunk in stream:
                     response_model = str(_field(chunk, "model", response_model))
                     chunk_input, chunk_output = _usage_counts(_field(chunk, "usage"))
@@ -484,11 +490,56 @@ class OpenAICompatibleChatProvider(_ProviderBase):
                     if not choices:
                         continue
                     delta = _field(choices[0], "delta")
+                    # 检查独立的思维链字段
+                    reasoning = (
+                        _field(delta, "reasoning_content")
+                        or _field(delta, "reasoning")
+                        or _field(delta, "thinking")
+                    )
+                    if reasoning and on_thinking_delta is not None:
+                        on_thinking_delta(str(reasoning))
                     text = _field(delta, "content")
                     if text:
                         text = str(text)
-                        content_parts.append(text)
-                        on_text_delta(text)
+                        # 解析 <think> 标签格式的思维链
+                        if on_thinking_delta is not None:
+                            remaining = text
+                            while remaining:
+                                if not in_thinking:
+                                    # 查找 <think> 开始标签
+                                    think_start = remaining.find("<think>")
+                                    if think_start != -1:
+                                        # <think> 前的普通文本
+                                        before = remaining[:think_start]
+                                        if before:
+                                            content_parts.append(before)
+                                            on_text_delta(before)
+                                        in_thinking = True
+                                        remaining = remaining[think_start + len("<think>"):]
+                                    else:
+                                        # 没有 <think> 标签，全部是普通文本
+                                        content_parts.append(remaining)
+                                        on_text_delta(remaining)
+                                        remaining = ""
+                                else:
+                                    # 在思维链中，查找 </think> 结束标签
+                                    think_end = remaining.find("</think>")
+                                    if think_end != -1:
+                                        # 思维链内容
+                                        thinking_content = remaining[:think_end]
+                                        if thinking_content:
+                                            thinking_buffer += thinking_content
+                                            on_thinking_delta(thinking_content)
+                                        in_thinking = False
+                                        remaining = remaining[think_end + len("</think>"):]
+                                    else:
+                                        # 还在思维链中
+                                        thinking_buffer += remaining
+                                        on_thinking_delta(remaining)
+                                        remaining = ""
+                        else:
+                            content_parts.append(text)
+                            on_text_delta(text)
                     for call in _field(delta, "tool_calls", []) or []:
                         index = int(_field(call, "index", 0))
                         current = accumulated_calls.setdefault(
@@ -526,7 +577,7 @@ class OpenAICompatibleChatProvider(_ProviderBase):
                     for call in tool_calls
                 ]
                 return ModelResponse(
-                    output_items=output_items,
+                    output_items=list(output_items),
                     output_text="",
                     model=response_model,
                     input_tokens=input_tokens,

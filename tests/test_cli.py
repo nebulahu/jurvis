@@ -30,13 +30,17 @@ def test_show_status_reports_audit_metrics(capsys) -> None:
         provider=FakeProvider(),
         history=[],
         memory=FakeMemory(),
+        model_requests=FakeMemory(),
+        audit=FakeMemory(),
     )
     settings = SimpleNamespace(
-        model="fake-model",
-        api_mode="chat_completions",
-        base_url=None,
-        request_timeout_seconds=60,
-        max_retries=2,
+        model_settings=SimpleNamespace(
+            model="fake-model",
+            api_mode="chat_completions",
+            base_url=None,
+            timeout_seconds=60,
+            max_retries=2,
+        ),
         max_history_items=120,
     )
 

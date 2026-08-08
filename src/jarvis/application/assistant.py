@@ -1,163 +1,287 @@
+"""Jarvis Agent - Main orchestrator for the AI assistant."""
 from __future__ import annotations
 
-import json
+import uuid
 from collections.abc import Callable
-from time import perf_counter
 from typing import Any
 
-from jarvis.application.models import (
-    ChatMessage,
-    ConversationItem,
-    ToolCall,
-    ToolResult,
-    normalize_conversation_item,
-)
-from jarvis.ports.model import ModelProvider
-from jarvis.ports.storage import AssistantStore
+from jarvis.logging_config import get_logger
+from jarvis.ports.models import ConversationItem
+from jarvis.ports.tools import CancellationManager, ToolRegistry
+from jarvis.ports.model import ModelProvider, TextDeltaCallback, ThinkingDeltaCallback
+from jarvis.ports.storage import AuditPort, ConversationPort, MemoryPort, ModelRequestPort
+from jarvis.ports.trace import TraceCollector
 from jarvis.safety import PermissionPolicy
-from jarvis.application.tools import ToolRegistry
+from jarvis.application.summary import SummaryService
+from jarvis.application.tool_executor import ToolExecutor
+from jarvis.application.react_engine import ReActEngine
+from jarvis.application.lats_engine import LATSEngine
+from jarvis.application.history_manager import HistoryManager
+
+logger = get_logger(__name__)
+
+# Optional imports for advanced features
+try:
+    from jarvis.application.intent import IntentClassifier
+    from jarvis.application.router import Router
+    from jarvis.application.planner import Planner, PlanExecutor
+    from jarvis.application.reflection import Reflector
+except ImportError:
+    IntentClassifier = None  # type: ignore[assignment,misc]
+    Router = None  # type: ignore[assignment,misc]
+    Planner = None  # type: ignore[assignment,misc]
+    PlanExecutor = None  # type: ignore[assignment,misc]
+    Reflector = None  # type: ignore[assignment,misc]
 
 
 DEFAULT_INSTRUCTIONS = """你是贾维斯，一个可靠、冷静而友好的中文个人助理。
-
 目标：完整解决用户当前的请求，并在确有必要时调用提供的工具。
-
 规则：
 - 优先使用中文回答，除非用户明确要求其他语言。
 - 模型只能提出工具调用，不能声称执行了未调用的操作。
 - 读取个人偏好或历史事实前，必要时先搜索长期记忆。
-- 只有用户明确要求“记住”或同义表达时，才保存长期记忆。
+- 只有用户明确要求"记住"或同义表达时，才保存长期记忆。
 - 不保存密码、API 密钥、支付信息或其他认证秘密。
 - 写入、覆盖或其他需要确认的操作被拒绝后，解释结果，不要绕过权限。
-- 获得足够结果后直接回答；最多使用必要的少量工具步骤。
-"""
-
-
-def _field(item: Any, name: str, default: Any = None) -> Any:
-    if isinstance(item, dict):
-        return item.get(name, default)
-    return getattr(item, name, default)
+- 获得足够结果后直接回答；最多使用必要的少量工具步骤。"""
 
 
 class JarvisAgent:
+    """Main agent orchestrator.
+
+    Composes:
+    - HistoryManager: Manages conversation history
+    - ToolExecutor: Executes tools with permissions and audit
+    - ReActEngine: Runs ReAct loops for tool use
+    - LATSEngine: Runs LATS for complex tasks
+    - Router: Routes based on intent (optional)
+    """
+
     def __init__(
         self,
         provider: ModelProvider,
         tools: ToolRegistry,
         permissions: PermissionPolicy,
-        memory: AssistantStore,
+        *,
+        memory: MemoryPort | None = None,
+        model_requests: ModelRequestPort | None = None,
+        conversation: ConversationPort | None = None,
+        audit: AuditPort | None = None,
+        cancellation: CancellationManager | None = None,
         max_tool_rounds: int = 6,
         max_history_items: int = 120,
         instructions: str = DEFAULT_INSTRUCTIONS,
+        summary_service: SummaryService | None = None,
+        router: Any | None = None,
+        planner: Any | None = None,
+        plan_executor: Any | None = None,
+        reflector: Any | None = None,
+        lats_solver: Any | None = None,
+        trace_collector: TraceCollector | None = None,
     ) -> None:
+        # Core components
         self.provider = provider
         self.tools = tools
         self.permissions = permissions
         self.memory = memory
-        self.max_tool_rounds = max_tool_rounds
-        self.max_history_items = max_history_items
+        self.cancellation = cancellation or CancellationManager()
         self.instructions = instructions
-        self.history: list[ConversationItem] = []
+        self._trace = trace_collector
+
+        # Extracted components
+        self._history_manager = HistoryManager(
+            conversation=conversation,
+            summary_service=summary_service,
+            max_items=max_history_items,
+        )
+        self._tool_executor = ToolExecutor(
+            tools=tools,
+            permissions=permissions,
+            audit=audit,
+            trace=trace_collector,
+        )
+        self._react_engine = ReActEngine(
+            provider=provider,
+            tool_executor=self._tool_executor,
+            instructions=instructions,
+            model_requests=model_requests,
+            conversation=conversation,
+            max_rounds=max_tool_rounds,
+            reflector=reflector,
+            trace=trace_collector,
+        )
+        self._lats_engine = LATSEngine(
+            lats_solver=lats_solver,
+            conversation=conversation,
+            trace=trace_collector,
+        )
+
+        # Optional advanced components
+        self.router = router
+        self.planner = planner
+        self.plan_executor = plan_executor
+        self.reflector = reflector
+        self._model_requests = model_requests
+        self._audit = audit
+
+    @property
+    def trace_collector(self) -> TraceCollector | None:
+        """Get trace collector for TUI dashboard integration."""
+        return self._trace
+
+    @property
+    def model_requests(self) -> ModelRequestPort | None:
+        """Get model request port for status reporting."""
+        return self._model_requests
+
+    @property
+    def audit(self) -> AuditPort | None:
+        """Get audit port for status reporting."""
+        return self._audit
+
+    @property
+    def history(self) -> list[ConversationItem]:
+        """Get or set conversation history."""
+        return self._history_manager.history
+
+    @history.setter
+    def history(self, value: list[ConversationItem]) -> None:
+        self._history_manager._history = list(value)
 
     def clear_history(self) -> None:
-        self.history.clear()
+        """Clear conversation history."""
+        self._history_manager.clear()
 
     def cancel_pending_actions(self) -> None:
-        self.tools.request_cancellation()
-
-    def _trim_history(self) -> None:
-        if len(self.history) <= self.max_history_items:
-            return
-        cutoff = len(self.history) - self.max_history_items
-        for index in range(cutoff, len(self.history)):
-            if isinstance(self.history[index], ChatMessage) and self.history[index].role == "user":
-                self.history = self.history[index:]
-                return
+        """Request cancellation of pending actions."""
+        self.cancellation.request_cancellation()
 
     def chat(
         self,
         user_text: str,
-        on_text_delta: Callable[[str], None] | None = None,
+        on_text_delta: TextDeltaCallback | None = None,
+        on_thinking_delta: ThinkingDeltaCallback | None = None,
     ) -> str:
-        self.tools.clear_cancellation()
-        self._trim_history()
-        self.memory.add_conversation("user", user_text)
-        self.history.append(ChatMessage(role="user", content=user_text))
+        """Process a user message and return a response.
 
-        for _ in range(self.max_tool_rounds):
-            started = perf_counter()
-            try:
-                response = self.provider.respond(
-                    instructions=self.instructions,
-                    input_items=self.history,
-                    tools=self.tools.schemas(),
-                    on_text_delta=on_text_delta,
+        Args:
+            user_text: The user's message
+            on_text_delta: Callback for text streaming
+            on_thinking_delta: Callback for thinking streaming
+
+        Returns:
+            The assistant's response
+        """
+        self.cancellation.clear_cancellation()
+        self._history_manager.trim()
+
+        # Start trace session
+        session_id = f"chat_{uuid.uuid4().hex[:12]}"
+        if self._trace is not None:
+            self._trace.start_session(session_id, {"user_text": user_text[:100]})
+
+        try:
+            # Add user message to history
+            self._history_manager.add_user_message(user_text)
+
+            # Use router if available for intent-based routing
+            if self.router is not None:
+                response = self._chat_with_routing(user_text, on_text_delta, on_thinking_delta)
+            else:
+                # Default: ReAct loop
+                response = self._react_engine.run(
+                    self._history_manager.history,
+                    on_text_delta,
+                    on_thinking_delta,
                 )
-            except Exception as exc:
-                self.memory.add_model_request(
-                    model=str(getattr(self.provider, "model", "unknown")),
-                    api_mode=str(getattr(self.provider, "api_mode", "unknown")),
-                    latency_ms=round((perf_counter() - started) * 1000),
-                    status="error",
-                    error=str(exc),
-                )
-                raise
-            self.memory.add_model_request(
-                model=response.model or str(getattr(self.provider, "model", "unknown")),
-                api_mode=str(getattr(self.provider, "api_mode", "unknown")),
-                latency_ms=round((perf_counter() - started) * 1000),
-                status="success",
-                input_tokens=response.input_tokens,
-                output_tokens=response.output_tokens,
+
+            # End trace session
+            if self._trace is not None:
+                self._trace.end_session(session_id)
+
+            return response
+
+        except Exception as e:
+            # Record error in trace
+            if self._trace is not None:
+                self._trace.emit_error(session_id, str(e), "chat")
+                self._trace.end_session(session_id)
+            raise
+
+    def _chat_with_routing(
+        self,
+        user_text: str,
+        on_text_delta: TextDeltaCallback | None = None,
+        on_thinking_delta: ThinkingDeltaCallback | None = None,
+    ) -> str:
+        """Chat with intent-based routing."""
+        # Build context
+        context = self._history_manager.get_context()
+        context["tools"] = self.tools.schemas()
+
+        # Route based on intent
+        if self.router is None:
+            return self._react_engine.run(
+                self._history_manager.history,
+                on_text_delta,
+                on_thinking_delta,
             )
-            output_items = [normalize_conversation_item(item) for item in response.output_items]
-            self.history.extend(output_items)
-            calls = [item for item in output_items if isinstance(item, ToolCall)]
-            if not calls:
-                answer = response.output_text.strip() or "我没有生成可显示的回答。"
-                self.memory.add_conversation("assistant", answer)
-                self._trim_history()
-                return answer
 
-            for call in calls:
-                call_id = call.call_id
-                name = call.name
-                raw_arguments = call.arguments
-                try:
-                    arguments = (
-                        json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
-                    )
-                    if not isinstance(arguments, dict):
-                        raise ValueError("工具参数必须是 JSON 对象")
-                    tool = self.tools.get(name)
-                    risk = tool.resolve_risk(arguments)
-                    preview_arguments = tool.preview_arguments(arguments)
-                    decision = self.permissions.decide(
-                        name, risk, preview_arguments
-                    )
-                    if decision.allowed:
-                        try:
-                            result = self.tools.execute(name, arguments)
-                        except Exception as exc:  # tool failures are returned to the model
-                            result = f"工具执行失败：{type(exc).__name__}: {exc}"
-                    else:
-                        result = f"操作未执行：{decision.reason}"
-                    self.memory.add_audit(
-                        name,
-                        preview_arguments,
-                        decision.allowed,
-                        decision.reason,
-                        result,
-                        int(risk),
-                    )
-                except Exception as exc:
-                    arguments = {}
-                    result = f"工具调用无效：{type(exc).__name__}: {exc}"
-                    self.memory.add_audit(name or "<missing>", arguments, False, "参数无效", result)
+        route_result = self.router.route(user_text, context)
 
-                self.history.append(ToolResult(call_id=call_id, output=result))
+        # Emit trace events
+        session_id = self._trace.current_session_id if self._trace else None
+        if self._trace is not None:
+            self._trace.emit_intent(
+                session_id,
+                route_result.intent.value,
+                route_result.confidence,
+                route_result.reasoning,
+            )
 
-        answer = f"为保证安全，我在连续 {self.max_tool_rounds} 轮工具调用后停止了。请缩小任务范围或确认下一步。"
-        self.memory.add_conversation("assistant", answer)
-        self._trim_history()
-        return answer
+        # Log routing decision
+        logger.info(
+            "意图路由",
+            intent=route_result.intent.value,
+            confidence=route_result.confidence,
+        )
+
+        # If routed to a handler that returned a response, use it
+        response_text: str = route_result.response
+        if response_text and not response_text.startswith("["):
+            if self._trace is not None:
+                self._trace.emit_route(session_id, "handler", route_result.intent.value)
+            self._history_manager.add_assistant_message(response_text)
+            return response_text
+
+        # For COMPLEX_TASK, use LATS if available
+        if route_result.intent.value == "complex_task" and self._lats_engine.is_available:
+            if self._trace is not None:
+                self._trace.emit_route(session_id, "lats", route_result.intent.value)
+            return self._solve_with_lats(user_text, on_text_delta, on_thinking_delta)
+
+        # For TOOL_USE or if handler didn't return a real response, use ReAct
+        if self._trace is not None:
+            self._trace.emit_route(session_id, "react", route_result.intent.value)
+        return self._react_engine.run(
+            self._history_manager.history,
+            on_text_delta,
+            on_thinking_delta,
+        )
+
+    def _solve_with_lats(
+        self,
+        task: str,
+        on_text_delta: TextDeltaCallback | None = None,
+        on_thinking_delta: ThinkingDeltaCallback | None = None,
+    ) -> str:
+        """Solve complex task using LATS."""
+        try:
+            return self._lats_engine.solve(task)
+        except Exception:
+            # Fall back to ReAct
+            return self._react_engine.run(
+                self._history_manager.history,
+                on_text_delta,
+                on_thinking_delta,
+            )

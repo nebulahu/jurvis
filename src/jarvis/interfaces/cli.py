@@ -10,10 +10,14 @@ from jarvis.adapters.audio.voice import StreamingSpeechPlayer, build_voice_runti
 from jarvis.adapters.audio.wake import WakeCancelled, build_wake_runtime
 from jarvis.application.assistant import JarvisAgent
 from jarvis.application.voice_session import VoiceSession
-from jarvis.bootstrap import build_agent
+from jarvis.bootstrap import build_agent, build_dashboard
 from jarvis.config import Settings
-from jarvis.ports.audio import VoiceError
+from jarvis.interfaces.health import create_health_server
+from jarvis.logging_config import get_logger, setup_logging
+from jarvis.ports.audio import Speaker, VoiceError
 from jarvis.safety import RiskLevel
+
+logger = get_logger(__name__)
 
 
 def _confirm(tool_name: str, risk: RiskLevel, arguments: dict[str, object]) -> bool:
@@ -32,20 +36,20 @@ def _show_status(agent: JarvisAgent, settings: Settings) -> None:
     print("正在检查模型服务……")
     status = agent.provider.health_check()
     print(f"服务：{'正常' if status.ok else '异常'}（{status.latency_ms} ms）")
-    print(f"模型：{settings.model}")
-    print(f"接口：{settings.api_mode}")
-    print(f"地址：{settings.base_url or 'SDK 默认地址'}")
-    print(f"超时/重试：{settings.request_timeout_seconds:g}s / {settings.max_retries} 次")
+    print(f"模型：{settings.model_settings.model}")
+    print(f"接口：{settings.model_settings.api_mode}")
+    print(f"地址：{settings.model_settings.base_url or 'SDK 默认地址'}")
+    print(f"超时/重试：{settings.model_settings.timeout_seconds:g}s / {settings.model_settings.max_retries} 次")
     print(f"上下文项：{len(agent.history)} / {settings.max_history_items}")
     print(f"详情：{status.message}")
-    latest = agent.memory.latest_model_request()
+    latest = agent.model_requests.latest_model_request() if agent.model_requests else None
     if latest:
         print(
             "最近请求："
             f"{latest['status']}，{latest['latency_ms']} ms，"
             f"输入/输出 Token={latest['input_tokens']}/{latest['output_tokens']}"
         )
-    audit_metrics = agent.memory.audit_metrics()
+    audit_metrics = agent.audit.audit_metrics() if agent.audit else {"total": 0, "success_rate": 0.0, "timeout_rate": 0.0, "ambiguous_rate": 0.0, "user_rejection_rate": 0.0}
     if audit_metrics["total"]:
         print(
             "工具审计："
@@ -62,8 +66,12 @@ def _chat_with_stream(
     assistant_name: str,
     text: str,
     on_text_delta: Callable[[str], None] | None = None,
+    on_thinking_delta: Callable[[str], None] | None = None,
+    enable_thinking: bool = False,
+    timeout: float = 60.0,
 ) -> str:
     started = False
+    thinking_started = False
 
     def write_delta(delta: str) -> None:
         nonlocal started
@@ -74,20 +82,66 @@ def _chat_with_stream(
         if on_text_delta is not None:
             on_text_delta(delta)
 
+    def write_thinking(delta: str) -> None:
+        nonlocal thinking_started
+        if not thinking_started:
+            print("\n💭 思考中...", flush=True)
+            thinking_started = True
+        print(f"  {delta}", end="", flush=True)
+        if on_thinking_delta is not None:
+            on_thinking_delta(delta)
+
+    # 根据配置决定是否传入思维链回调
+    thinking_callback = write_thinking if enable_thinking else None
+
+    # 使用线程包装，防止流式响应卡死
+    result: list[str] = []
+    error: list[BaseException] = []
+    cancelled = threading.Event()
+
+    def _run() -> None:
+        try:
+            result.append(agent.chat(text, on_text_delta=write_delta, on_thinking_delta=thinking_callback))
+        except BaseException as exc:
+            if not cancelled.is_set():
+                error.append(exc)
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
     try:
-        answer = agent.chat(text, on_text_delta=write_delta)
+        thread.join(timeout=timeout)
+    except KeyboardInterrupt:
+        cancelled.set()
+        print("\n已取消。")
+        return ""
+
+    if thread.is_alive():
+        # 超时未完成
+        cancelled.set()
+        print(f"\n\n请求超时（{timeout:.0f}秒），请检查网络连接后重试。", file=sys.stderr)
+        raise TimeoutError(f"请求超时（{timeout:.0f}秒）")
+
+    if not result and not error:
+        # 线程结束但没有结果
+        print("\n请求未返回结果，请重试。", file=sys.stderr)
+        return ""
+
+    if error:
         if started:
             print()
-        else:
-            print(f"\n{assistant_name}> {answer}")
-        return answer
-    except Exception:
-        if started:
-            print()
-        raise
+        raise error[0]
+
+    answer = result[0] if result else ""
+    if thinking_started:
+        print()  # 思考结束后换行
+    if started:
+        print()
+    else:
+        print(f"\n{assistant_name}> {answer}")
+    return answer
 
 
-def _wait_for_recording_stop(limit_reached) -> bool:
+def _wait_for_recording_stop(limit_reached: threading.Event) -> bool:
     """Return True when recording stopped because its configured limit was reached."""
     if sys.platform != "win32":
         input()
@@ -134,16 +188,17 @@ def _run_voice_response(
     settings: Settings,
     session: VoiceSession,
     transcript: str,
-    speaker,
+    speaker: object,  # Speaker protocol - using object to avoid import cycle
 ) -> None:
     print("[思考中]", flush=True)
-    if not settings.tts_enabled:
+    if not settings.voice_settings.tts_enabled:
         _chat_with_stream(agent, settings.assistant_name, transcript)
         session.complete_turn()
         return
 
+    from typing import cast
     player = StreamingSpeechPlayer(
-        speaker,
+        cast(Speaker, speaker),
         on_speaking=session.mark_speaking,
     )
     watcher_stop = threading.Event()
@@ -249,7 +304,7 @@ def _wake_mode(agent: JarvisAgent, settings: Settings) -> None:
     session = VoiceSession(voice_runtime.recorder, voice_runtime.transcriber)
 
     print(
-        f"\n已进入唤醒模式。说出 {settings.wake_model!r} 后直接讲话；"
+        f"\n已进入唤醒模式。说出 {settings.wake_settings.model!r} 后直接讲话；"
         "等待或录音时按 Esc 返回文字模式。"
     )
     while True:
@@ -287,14 +342,71 @@ def _wake_mode(agent: JarvisAgent, settings: Settings) -> None:
             print(f"[唤醒请求失败] {type(exc).__name__}: {exc}", file=sys.stderr)
 
 
+def _dashboard_mode(agent: JarvisAgent, settings: Settings) -> None:
+    """Launch the Jarvis Dashboard TUI (chat + trace).
+
+    The TUI is launched in-process on the main thread (textual owns the terminal).
+    A WSTraceServer runs in a daemon thread and forwards every emit() call
+    from the AgentTraceCollector to connected WS clients. Press q inside the TUI
+    to return to the REPL.
+    """
+    try:
+        from jarvis.observability.ws_trace_server import WSTraceServer
+    except ImportError as exc:
+        print(
+            f"[dashboard] 缺少依赖：{exc}\n"
+            "  请运行：pip install -e \".[tui]\"",
+            file=sys.stderr,
+        )
+        return
+
+    ws_server: WSTraceServer | None = None
+    if agent.trace_collector is None:
+        print(
+            "[dashboard] 跟踪收集器未启用，TUI 将以只读模式启动（仅数据库轮询）。",
+            file=sys.stderr,
+        )
+    else:
+        ws_server = WSTraceServer(agent.trace_collector)  # type: ignore[arg-type]
+        ws_server.start()
+        print(f"[dashboard] WebSocket 服务已启动：{ws_server.uri}", file=sys.stderr)
+
+    ws_uri = ws_server.uri if ws_server is not None else None
+    app = build_dashboard(settings, agent, ws_uri)
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if ws_server is not None:
+            ws_server.stop()
+        print("[dashboard] TUI 已退出，回到 REPL。", file=sys.stderr)
+
+
 def main() -> None:
+    setup_logging()
     try:
         settings = Settings.load()
         agent = build_agent(settings, _confirm)
     except Exception as exc:
+        logger.error("启动失败", error=str(exc))
         print(f"启动失败：{exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
+    # Start health check server if enabled
+    health_server = None
+    if settings.health_settings.enabled:
+        def health_check() -> dict[str, object]:
+            status = agent.provider.health_check()
+            return {"ok": status.ok, "model": status.model, "latency_ms": status.latency_ms}
+
+        health_server = create_health_server(
+            port=settings.health_settings.port,
+            health_check_fn=health_check,
+        )
+        health_server.start()
+
+    logger.info("Jarvis 已启动", model=settings.model_settings.model)
     print(f"{settings.assistant_name} 已启动。输入 /help 查看命令，/quit 退出。")
     while True:
         try:
@@ -310,7 +422,8 @@ def main() -> None:
         if text == "/help":
             print(
                 "/help 显示帮助；/status 检查服务；/clear 清空当前上下文；"
-                "/mem 关键词 搜索记忆；/voice 按键语音；/wake 唤醒词模式；/quit 退出。"
+                "/mem 关键词 搜索记忆；/voice 按键语音；/wake 唤醒词模式；"
+                "/dashboard 打开控制台（对话+跟踪）；/quit 退出。"
             )
             continue
         if text == "/status":
@@ -321,11 +434,14 @@ def main() -> None:
             print("当前会话上下文已清空，长期记忆不受影响。")
             continue
         if text.startswith("/mem "):
-            records = agent.memory.search(text[5:].strip())
-            if not records:
-                print("没有找到相关记忆。")
-            for record in records:
-                print(f"- [{record.category}] {record.title}: {record.content}")
+            if agent.memory is None:
+                print("记忆功能未启用。")
+            else:
+                records = agent.memory.search(text[5:].strip())
+                if not records:
+                    print("没有找到相关记忆。")
+                for record in records:
+                    print(f"- [{record.category}] {record.title}: {record.content}")
             continue
         if text == "/voice":
             _voice_mode(agent, settings)
@@ -333,7 +449,35 @@ def main() -> None:
         if text == "/wake":
             _wake_mode(agent, settings)
             continue
+        if text == "/dashboard":
+            _dashboard_mode(agent, settings)
+            continue
         try:
-            _chat_with_stream(agent, settings.assistant_name, text)
+            _chat_with_stream(
+                agent,
+                settings.assistant_name,
+                text,
+                enable_thinking=settings.model_settings.enable_thinking,
+            )
+        except TimeoutError:
+            logger.error("请求超时")
+            print("\n请求超时，请检查网络连接后重试。", file=sys.stderr)
+        except ConnectionError as exc:
+            logger.error("网络连接失败", error=str(exc))
+            print(f"\n网络连接失败：{exc}", file=sys.stderr)
+            print("请检查网络连接或代理设置。", file=sys.stderr)
         except Exception as exc:
-            print(f"\n请求失败：{type(exc).__name__}: {exc}", file=sys.stderr)
+            error_msg = str(exc)
+            # 提取常见网络错误的关键信息
+            if "SSL" in error_msg or "ssl" in error_msg:
+                logger.error("SSL 连接错误", error_type=type(exc).__name__, error=error_msg)
+                print("\nSSL 连接错误，请检查网络代理或防火墙设置。", file=sys.stderr)
+            elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+                logger.error("请求超时", error_type=type(exc).__name__, error=error_msg)
+                print("\n请求超时，请检查网络连接后重试。", file=sys.stderr)
+            elif "connection" in error_msg.lower() or "reset" in error_msg.lower():
+                logger.error("连接被重置", error_type=type(exc).__name__, error=error_msg)
+                print("\n连接被重置，请检查网络连接后重试。", file=sys.stderr)
+            else:
+                logger.error("请求失败", error_type=type(exc).__name__, error=error_msg)
+                print(f"\n请求失败：{type(exc).__name__}: {exc}", file=sys.stderr)

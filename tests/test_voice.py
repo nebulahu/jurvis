@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import jarvis.interfaces.cli as cli
 import pytest
-from jarvis.voice import (
+from jarvis.adapters.audio.voice import (
     AudioClip,
     OpenAITranscriber,
     SoundDeviceRecorder,
@@ -281,8 +281,7 @@ def test_voice_mode_transcribes_chats_speaks_and_returns(monkeypatch, capsys) ->
     agent = object()
     settings = SimpleNamespace(
         assistant_name="贾维斯",
-        tts_enabled=True,
-        voice_settings=object(),
+        voice_settings=SimpleNamespace(tts_enabled=True),
         model_settings=object(),
     )
 
@@ -338,7 +337,7 @@ def test_voice_escape_cancels_pending_agent_actions(monkeypatch) -> None:
 
     cli._run_voice_response(
         agent,
-        SimpleNamespace(tts_enabled=True, assistant_name="贾维斯"),
+        SimpleNamespace(voice_settings=SimpleNamespace(tts_enabled=True), assistant_name="贾维斯"),
         session,
         "测试",
         FakeSpeaker(),

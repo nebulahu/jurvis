@@ -8,6 +8,7 @@ import pytest
 from jarvis.adapters.desktop import WindowsApplicationLauncher, WindowsDesktopObserver
 from jarvis.adapters.desktop.windows import NativeWindowInfo
 from jarvis.adapters.tools import register_desktop_tools
+from jarvis.application.tools import CancellationManager
 from jarvis.application.tools import ToolRegistry
 from jarvis.safety import RiskLevel
 from jarvis.ports.desktop import (
@@ -380,11 +381,12 @@ def test_desktop_tools_register_cancellation_callbacks() -> None:
     )
     controller = FakeDesktopObserver()
     registry = ToolRegistry()
-    register_desktop_tools(registry, launcher, controller, controller)
+    cancellation = CancellationManager()
+    register_desktop_tools(registry, launcher, controller, controller, cancellation)
 
-    registry.request_cancellation()
+    cancellation.request_cancellation()
     assert controller.cancelled
-    registry.clear_cancellation()
+    cancellation.clear_cancellation()
     assert not controller.cancelled
 
 

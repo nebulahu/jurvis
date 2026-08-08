@@ -1,12 +1,12 @@
 from types import SimpleNamespace
 from typing import Any
 
-from jarvis.provider import (
+from jarvis.adapters.providers.openai import (
     OpenAICompatibleChatProvider,
     OpenAICompatibleResponsesProvider,
     ProviderRequestError,
 )
-from jarvis.application.models import ChatMessage, ImageContent, TextContent, ToolCall, ToolResult
+from jarvis.ports.models import ChatMessage, ImageContent, TextContent, ToolCall, ToolResult
 
 
 class FakeCompletions:

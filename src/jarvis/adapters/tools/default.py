@@ -2,18 +2,19 @@ from jarvis.adapters.tools.desktop import register_desktop_tools
 from jarvis.adapters.tools.filesystem import register_filesystem_tools
 from jarvis.adapters.tools.memory import register_memory_tools
 from jarvis.adapters.tools.system import register_system_tools
-from jarvis.application.tools import ToolRegistry
-from jarvis.ports.storage import AssistantStore
+from jarvis.ports.tools import CancellationManager, ToolRegistry
+from jarvis.ports.storage import MemoryPort
 from jarvis.ports.desktop import ApplicationLauncher, DesktopController, DesktopObserver
 from jarvis.safety import PathGuard
 
 
 def build_default_registry(
-    memory: AssistantStore,
+    memory: MemoryPort,
     path_guard: PathGuard,
     application_launcher: ApplicationLauncher | None = None,
     desktop_observer: DesktopObserver | None = None,
     desktop_controller: DesktopController | None = None,
+    cancellation: CancellationManager | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     register_system_tools(registry)
@@ -25,5 +26,6 @@ def build_default_registry(
             application_launcher,
             desktop_observer,
             desktop_controller,
+            cancellation,
         )
     return registry

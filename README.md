@@ -1,6 +1,6 @@
 # Jarvis
 
-一个从零开始构建的个人 AI 助手 MVP。当前版本 `0.6.0` 已经完成文字交互核心闭环、Windows 语音交互、流式分句朗读、播放打断、唤醒词、自动录音端点检测，以及 Computer Use 的 M1-M4 受控桌面能力。
+一个从零开始构建的个人 AI 助手 MVP。当前版本 `0.6.1` 已经完成文字交互核心闭环、Windows 语音交互、流式分句朗读、播放打断、唤醒词、自动录音端点检测、Computer Use 的 M1-M4 受控桌面能力，以及记忆系统 2.0 的本地元数据与检索基础。
 
 ## 当前能力
 
@@ -15,7 +15,8 @@
 - 列出允许的 Windows 应用，并在用户确认后打开应用
 - 显式开启后可列出允许窗口、识别前台窗口、读取受限 UIA 控件树、捕获目标窗口本地临时截图，并经确认聚焦窗口、调用语义控件、填写普通文本、发送受限编辑快捷键、滚动语义控件或点击绑定截图的受限坐标
 - 经确认后写入文件或保存长期记忆
-- 将长期记忆同步为 Obsidian Markdown
+- 将长期记忆同步为带类型、来源、置信度和重要度元数据的 Obsidian Markdown
+- 支持基于 SQLite FTS5 的长期记忆检索，并保留 LIKE 兼容降级
 - 将对话、记忆和工具审计写入 SQLite
 - 使用允许目录和四级权限策略限制工具
 - 模型接口与工具注册表解耦，方便以后接入语音或其他模型
@@ -149,7 +150,7 @@ JARVIS_ALLOWED_APPLICATIONS=记事本;计算器;文件资源管理器;设置;画
 
 记事本、计算器、资源管理器、设置、画图和终端使用固定系统启动方式；其他应用从 Windows 开始菜单精确解析。`ChatGPT` 同时支持 `Codex` 别名。模型不能传入可执行文件路径或命令行参数，所有应用启动都会作为 L2 操作请求确认并写入工具审计。
 
-当前能力覆盖允许应用启动、允许窗口观察、语义化控件动作和目标窗口本地截图。尚不支持把截图发送给视觉模型、任意坐标点击或任意按键脚本。
+当前能力覆盖允许应用启动、允许窗口观察、语义化控件动作、目标窗口本地截图、受隐私门控的图像输入转换和绑定截图的受限坐标点击。尚不支持自动视觉工作流或任意按键脚本。
 
 Computer Use 基础配置默认关闭：
 
@@ -193,7 +194,7 @@ Computer Use 发布门禁、记事本基准、Obsidian/浏览器边界和失败�
 E:\CodexLib\Jarvis\<分类>\YYYYMMDD-HHMMSS-标题.md
 ```
 
-生成的笔记包含 Obsidian properties、标签和信息 callout，可直接在 Obsidian 中搜索和修改。
+生成的笔记包含 Obsidian properties、标签和信息 callout，可直接在 Obsidian 中搜索和修改。SQLite 记忆表会记录 `memory_type`、`source`、`confidence`、`importance`、`access_count` 和最近访问时间；检索优先使用 FTS5，并在不可用或无结果时回退到安全转义的 LIKE 查询。
 
 ## 架构
 
@@ -233,10 +234,15 @@ Agent 不保存 SDK 对象。切换模型服务不会绕过权限层：模型只
 | API 密钥 | `OPEN_API_KEY` | `OPENAI_API_KEY` |
 | 接口地址 | `OPEN_BASE_URL` | `OPENAI_BASE_URL` |
 | 模型名称 | `OPEN_MODEL` | `JARVIS_MODEL` |
+| 接口模式 | `OPEN_API_MODE` | — |
 | 推理等级 | `OPEN_REASONING_EFFORT` | `JARVIS_REASONING_EFFORT` |
+
+`OPEN_API_MODE` 取值为 `responses` 或 `chat_completions`，默认 `responses`。
 
 自定义 Base URL 时，程序默认不发送 `reasoning` 参数。只有你明确配置
 `OPEN_REASONING_EFFORT` 后才会发送，以减少不同服务之间的参数兼容问题。
+注意：`reasoning_effort` 仅在 Responses 模式下生效；Chat Completions 模式的
+Provider 不传递此参数。
 
 稳定性相关配置：
 
@@ -260,7 +266,7 @@ pytest
 
 ## 下一阶段
 
-1. 升级语义记忆检索和历史摘要。
+1. 完成记忆系统 2.0 的历史摘要、记忆治理和可解释检索排序。
 2. 增加应用启动、天气、日程和 Home Assistant 技能。
 3. 加入桌面悬浮窗、系统托盘、主动提醒、视觉和实体硬件。
 

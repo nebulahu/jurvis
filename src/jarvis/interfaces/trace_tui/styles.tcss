@@ -1,0 +1,450 @@
+/* Jarvis Dashboard - Catppuccin Mocha Dark Theme */
+
+/* Color palette */
+$base: #1e1e2e;
+$mantle: #181825;
+$crust: #11111b;
+$surface0: #313244;
+$surface1: #45475a;
+$surface2: #585b70;
+$overlay0: #6c7086;
+$overlay1: #7f849c;
+$text: #cdd6f4;
+$subtext0: #a6adc8;
+$subtext1: #bac2de;
+$blue: #89b4fa;
+$green: #a6e3a1;
+$red: #f38ba8;
+$yellow: #f9e2af;
+$mauve: #cba6f7;
+$teal: #94e2d5;
+$sky: #89dceb;
+
+/* Main layout */
+Screen {
+    background: $base;
+    color: $text;
+}
+
+/* Header bar */
+#header {
+    dock: top;
+    height: 3;
+    background: $mantle;
+    color: $text;
+    padding: 0 2;
+    content-align: left middle;
+}
+
+#header .title {
+    text-style: bold;
+    color: $blue;
+    width: 1fr;
+}
+
+#header .status {
+    color: $subtext0;
+    width: auto;
+}
+
+/* Sidebar */
+#sidebar {
+    dock: left;
+    width: 30;
+    background: $mantle;
+    border-right: solid $surface0;
+}
+
+#sidebar-title {
+    height: 3;
+    padding: 0 2;
+    content-align: left middle;
+    background: $crust;
+    color: $blue;
+    text-style: bold;
+    border-bottom: solid $surface0;
+}
+
+#session-list {
+    height: 1fr;
+    background: $mantle;
+}
+
+#session-list > .datatable--header {
+    background: $crust;
+    color: $subtext0;
+    text-style: bold;
+}
+
+#session-list > .datatable--cursor {
+    background: $surface0;
+    color: $text;
+}
+
+#session-list > .datatable--hover {
+    background: $surface1;
+}
+
+#session-list > .datatable--zebra {
+    background: $mantle;
+}
+
+/* Sidebar action buttons */
+#sidebar-actions {
+    height: 3;
+    padding: 1;
+    background: $crust;
+    border-top: solid $surface0;
+}
+
+#sidebar-actions Button {
+    width: 1fr;
+    height: 3;
+    margin: 0 1;
+    background: $surface0;
+    color: $text;
+    border: none;
+}
+
+#sidebar-actions Button:hover {
+    background: $surface1;
+    color: $blue;
+}
+
+#sidebar-actions Button:focus {
+    background: $surface2;
+    color: $blue;
+    border: none;
+}
+
+/* Main content area */
+#content {
+    width: 1fr;
+    background: $base;
+}
+
+/* Tab bar for switching panels */
+#tab-bar {
+    height: 3;
+    background: $mantle;
+    padding: 0 1;
+    content-align: left middle;
+    border-bottom: solid $surface0;
+}
+
+#tab-bar Button {
+    height: 3;
+    margin: 0 1;
+    background: transparent;
+    color: $subtext0;
+    border: none;
+    border-bottom: solid transparent;
+}
+
+#tab-bar Button:hover {
+    color: $text;
+    background: $surface0;
+}
+
+#tab-bar Button:focus {
+    color: $blue;
+    border-bottom: solid $blue;
+    background: transparent;
+}
+
+/* Active panel (chat, trace, etc.) */
+#active-panel {
+    height: 1fr;
+    background: $base;
+}
+
+/* Chat screen */
+#chat-container {
+    height: 1fr;
+    background: $base;
+}
+
+#chat-messages {
+    height: 1fr;
+    background: $base;
+    padding: 1;
+}
+
+#chat-input-area {
+    height: auto;
+    min-height: 5;
+    max-height: 10;
+    background: $mantle;
+    padding: 1;
+    border-top: solid $surface0;
+}
+
+#chat-input {
+    height: 3;
+    background: $surface0;
+    color: $text;
+    border: none;
+    padding: 0 1;
+}
+
+#chat-input:focus {
+    border: solid $blue;
+}
+
+/* Message styles */
+.user-message {
+    color: $text;
+    background: $surface0;
+    padding: 1;
+    margin: 1 0;
+    border-left: solid $blue;
+}
+
+.assistant-message {
+    color: $text;
+    background: $mantle;
+    padding: 1;
+    margin: 1 0;
+    border-left: solid $green;
+}
+
+.system-message {
+    color: $subtext0;
+    background: transparent;
+    padding: 0 1;
+    margin: 0 0;
+    text-style: italic;
+}
+
+.error-message {
+    color: $red;
+    background: $surface0;
+    padding: 1;
+    margin: 1 0;
+    border-left: solid $red;
+}
+
+/* Trace/detail screens */
+#detail-container {
+    height: 1fr;
+    background: $base;
+    padding: 1;
+}
+
+#detail-header {
+    height: 3;
+    background: $mantle;
+    padding: 0 1;
+    content-align: left middle;
+    margin-bottom: 1;
+}
+
+#detail-content {
+    height: 1fr;
+    background: $mantle;
+    padding: 1;
+}
+
+/* Data tables */
+DataTable {
+    background: $base;
+    color: $text;
+}
+
+DataTable > .datatable--header {
+    background: $mantle;
+    color: $blue;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: $surface0;
+    color: $text;
+}
+
+DataTable > .datatable--hover {
+    background: $surface1;
+}
+
+DataTable > .datatable--zebra {
+    background: $mantle;
+}
+
+/* Metrics panels */
+.metric-panel {
+    background: $mantle;
+    border: solid $surface0;
+    padding: 1;
+    height: 100%;
+}
+
+.metric-title {
+    text-style: bold;
+    color: $blue;
+    margin-bottom: 1;
+}
+
+.metric-value {
+    text-style: bold;
+    color: $green;
+    text-align: center;
+    width: 100%;
+    content-align: center middle;
+}
+
+.metric-error {
+    color: $red;
+}
+
+/* Status indicators */
+.status-active {
+    color: $green;
+}
+
+.status-inactive {
+    color: $overlay0;
+}
+
+.status-error {
+    color: $red;
+}
+
+/* Input field */
+Input {
+    background: $surface0;
+    color: $text;
+    border: none;
+}
+
+Input:focus {
+    border: solid $blue;
+}
+
+Input > .input--placeholder {
+    color: $overlay0;
+}
+
+Input > .input--cursor {
+    color: $blue;
+}
+
+Input > .input--selection {
+    background: $surface2;
+}
+
+/* Buttons */
+Button {
+    background: $surface0;
+    color: $text;
+    border: none;
+}
+
+Button:hover {
+    background: $surface1;
+}
+
+Button:focus {
+    background: $surface2;
+    color: $blue;
+}
+
+Button.-primary {
+    background: $blue;
+    color: $crust;
+}
+
+Button.-primary:hover {
+    background: $sky;
+}
+
+Button.-danger {
+    background: $red;
+    color: $crust;
+}
+
+Button.-danger:hover {
+    background: $red;
+}
+
+/* Static text */
+Static {
+    color: $text;
+}
+
+/* Scrollbar */
+.scrollbar--vertical {
+    background: $surface0;
+    width: 1;
+}
+
+.scrollbar--vertical:hover {
+    background: $surface1;
+}
+
+.scrollbar--thumb {
+    background: $overlay0;
+    width: 1;
+}
+
+.scrollbar--thumb:hover {
+    background: $overlay1;
+}
+
+/* Tooltip */
+.tooltip {
+    background: $mantle;
+    color: $text;
+    border: solid $surface0;
+    padding: 1;
+}
+
+/* Notification */
+.notification {
+    background: $surface0;
+    color: $text;
+    border: solid $surface1;
+    padding: 1;
+}
+
+/* Footer */
+#footer {
+    dock: bottom;
+    height: 1;
+    background: $crust;
+    color: $subtext0;
+    padding: 0 2;
+    content-align: left middle;
+}
+
+/* Key binding hints */
+.key {
+    background: $surface0;
+    color: $text;
+    padding: 0 1;
+    text-style: bold;
+}
+
+.key-description {
+    color: $subtext0;
+}
+
+/* RichLog */
+RichLog {
+    background: $base;
+    color: $text;
+    padding: 1;
+}
+
+/* Container */
+Container {
+    background: $base;
+}
+
+/* Horizontal/Vertical layouts */
+Horizontal {
+    background: $base;
+}
+
+Vertical {
+    background: $base;
+}
