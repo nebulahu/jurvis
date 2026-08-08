@@ -26,6 +26,7 @@ class RouteResult:
     response: str
     intent: Intent
     confidence: float
+    reasoning: str = ""
 
 
 class Router:
@@ -63,6 +64,7 @@ class Router:
                     response=f"[意图: {intent_result.intent.value}] 暂无专用处理器，使用默认处理。",
                     intent=intent_result.intent,
                     confidence=intent_result.confidence,
+                    reasoning=intent_result.reasoning,
                 )
 
         # Execute handler
@@ -72,6 +74,7 @@ class Router:
                 response=response,
                 intent=intent_result.intent,
                 confidence=intent_result.confidence,
+                reasoning=intent_result.reasoning,
             )
         except Exception as exc:
             logger.error("处理器执行失败", intent=intent_result.intent.value, error=str(exc))
@@ -79,6 +82,7 @@ class Router:
                 response=f"处理请求时出错：{exc}",
                 intent=intent_result.intent,
                 confidence=intent_result.confidence,
+                reasoning=intent_result.reasoning,
             )
 
 
