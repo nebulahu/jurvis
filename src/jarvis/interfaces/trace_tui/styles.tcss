@@ -1,0 +1,79 @@
+/* Trace Dashboard TUI styles */
+
+Screen {
+    background: $surface;
+}
+
+Header {
+    dock: top;
+    height: 1;
+}
+
+Footer {
+    dock: bottom;
+    height: 1;
+}
+
+#status {
+    dock: top;
+    height: 1;
+    background: $primary;
+    color: $text;
+    padding: 0 1;
+}
+
+DataTable {
+    height: 1fr;
+}
+
+#filter-input {
+    margin: 1 1 0 1;
+}
+
+.event-success { color: green; }
+.event-error { color: red; }
+.event-tool { color: magenta; }
+.event-model { color: yellow; }
+.event-route { color: blue; }
+.event-lats { color: magenta; }
+.event-plan { color: blue; }
+.event-meta { color: cyan; }
+.event-default { color: gray; }
+
+.metrics-grid {
+    layout: grid;
+    grid-size: 2 2;
+    grid-gutter: 1;
+    height: 1fr;
+}
+
+.metric-panel {
+    border: round $primary;
+    padding: 1;
+    height: 100%;
+}
+
+.metric-title {
+    text-style: bold;
+    color: $accent;
+}
+
+.metric-value {
+    text-style: bold;
+    color: $success;
+    text-align: center;
+    width: 100%;
+    content-align: center middle;
+}
+
+.metric-error { color: $error; }
+
+.list-cursor {
+    background: $accent;
+    color: $text;
+}
+
+.help-table {
+    width: 100%;
+    height: auto;
+}

@@ -26,9 +26,14 @@ wake = [
   "webrtcvad-wheels>=2.0.14,<3",
 ]
 desktop = ["comtypes>=1.4,<2"]
+tui = [
+  "textual>=0.50,<1",
+  "websockets>=11,<14",
+]
 
 [project.scripts]
 jarvis = "jarvis.interfaces.cli:main"
+jarvis-trace = "jarvis.interfaces.trace_tui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -70,3 +75,11 @@ ignore_missing_imports = true
 module = "jarvis.adapters.desktop.*"
 # Windows-specific ctypes code with complex type inference
 disable_error_code = ["arg-type", "attr-defined", "assignment", "no-untyped-def", "dict-item"]
+
+[[tool.mypy.overrides]]
+module = "textual.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "websockets.*"
+ignore_missing_imports = true
