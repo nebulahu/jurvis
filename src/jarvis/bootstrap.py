@@ -119,6 +119,39 @@ def _build_memory_service(db_path: Path, memory_root: Path) -> "MemoryService":
     return MemoryService(db, writer)
 
 
+def build_dashboard(
+    settings: Settings,
+    agent: JarvisAgent | None = None,
+    ws_uri: str | None = None,
+) -> Any:
+    """Build the TUI dashboard application.
+
+    This factory assembles the TUI with proper port-adapter wiring:
+    - SQLiteTraceStore implements TraceQueryPort
+    - AgentChatAdapter implements ChatServicePort (if agent provided)
+
+    Args:
+        settings: Application settings.
+        agent: Optional JarvisAgent for chat functionality.
+        ws_uri: Optional WebSocket URI for live event tail.
+
+    Returns:
+        A configured TraceTUIApp instance.
+    """
+    from jarvis.adapters.chat import AgentChatAdapter
+    from jarvis.adapters.storage.trace_store import SQLiteTraceStore
+    from jarvis.interfaces.trace_tui.app import TraceTUIApp
+
+    trace_store = SQLiteTraceStore(settings.storage_settings.db_path)
+    chat_service = AgentChatAdapter(agent) if agent else None
+
+    return TraceTUIApp(
+        trace_store=trace_store,
+        chat_service=chat_service,
+        ws_uri=ws_uri,
+    )
+
+
 def build_agent(
     settings: Settings,
     approval_callback: ApprovalCallback | None = None,

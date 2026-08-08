@@ -10,8 +10,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from jarvis.adapters.storage.trace_store import SQLiteTraceStore
 from jarvis.config import Settings
+from jarvis.bootstrap import build_dashboard
 
 from jarvis.interfaces.trace_tui.app import TraceTUIApp
 
@@ -70,14 +70,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    store = SQLiteTraceStore(db_path)
     ws_uri = None if args.no_ws else args.ws
-    app = TraceTUIApp(
-        store=store,
-        ws_uri=ws_uri,
-        poll_interval=args.poll,
-        initial_limit=args.limit,
-    )
+    app = build_dashboard(Settings.load(), ws_uri=ws_uri)
     try:
         app.run()
     except KeyboardInterrupt:

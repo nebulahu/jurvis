@@ -257,7 +257,7 @@ class FilterScreen(Screen[Any]):
         table.clear()
         if not query.strip():
             return
-        results = app.store.search_events(query, limit=200)
+        results = app.trace_store.search_events(query, limit=200)
         for e in results:
             table.add_row(
                 e.timestamp.strftime("%m-%d %H:%M:%S"),
@@ -377,8 +377,8 @@ class MetricsScreen(Screen[Any]):
 class ChatScreen(Screen[Any]):
     """Inline chat with the agent. Streams tokens into the log.
 
-    Only fully functional when the App was constructed with an `agent`.
-    In standalone `jarvis-trace` mode (no agent), shows a hint instead.
+    Only fully functional when the App was constructed with a chat_service.
+    In standalone `jarvis-dashboard` mode (no chat_service), shows a hint instead.
     """
 
     BINDINGS = [
@@ -394,9 +394,9 @@ class ChatScreen(Screen[Any]):
     def on_mount(self) -> None:
         log: RichLog = self.query_one("#chat-log", RichLog)
         app: "TraceTUIApp" = self.app  # type: ignore[assignment]
-        if app.agent is None:
-            log.write("[yellow]Standalone mode: no agent wired up.[/yellow]")
-            log.write("[dim]Run via `jarvis` REPL → /trace for live chat.[/dim]")
+        if app.chat_service is None:
+            log.write("[yellow]Standalone mode: no chat service wired up.[/yellow]")
+            log.write("[dim]Run via `jarvis` REPL → /dashboard for live chat.[/dim]")
             self.query_one("#chat-input", Input).disabled = True
         else:
             log.write("[bold green]Jarvis[/bold green] 已就绪，输入消息后按 Enter。")
@@ -413,9 +413,9 @@ class ChatScreen(Screen[Any]):
         app: "TraceTUIApp" = self.app  # type: ignore[assignment]
         log.write(f"[bold cyan]你[/bold cyan] › {text}")
 
-        agent = app.agent
-        if agent is None:
-            log.write("[red](no agent available in standalone mode)[/red]")
+        chat = app.chat_service
+        if chat is None:
+            log.write("[red](no chat service available in standalone mode)[/red]")
             return
 
         # Disable input while generating to prevent concurrent calls.
@@ -427,7 +427,7 @@ class ChatScreen(Screen[Any]):
             log.write(delta, expand=False)
 
         try:
-            response = agent.chat(text, on_text_delta=on_delta)
+            response = chat.send_message(text, on_delta=on_delta)
             if response:
                 # Force a newline so the next user message starts cleanly.
                 log.write("")

@@ -169,7 +169,7 @@ async def test_tui_renders_session_list(tmp_path: Path) -> None:
     _seed_session(store, "alpha_session", event_count=2)
     _seed_session(store, "beta_session", event_count=4)
 
-    app = TraceTUIApp(store=store, ws_uri=None, poll_interval=3600)
+    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600)
     async with app.run_test() as pilot:
         await pilot.pause()
         # Sessions loaded
@@ -189,7 +189,7 @@ async def test_tui_metrics_screen_aggregates(tmp_path: Path) -> None:
     store = SQLiteTraceStore(db)
     _seed_session(store, "s1", event_count=5)
 
-    app = TraceTUIApp(store=store, ws_uri=None, poll_interval=3600)
+    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600)
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.goto_screen("metrics")
@@ -209,7 +209,7 @@ async def test_tui_filter_screen_search(tmp_path: Path) -> None:
     store = SQLiteTraceStore(db)
     _seed_session(store, "s1", event_count=3)
 
-    app = TraceTUIApp(store=store, ws_uri=None, poll_interval=3600)
+    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600)
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.goto_screen("filter")
@@ -232,7 +232,7 @@ async def test_tui_live_tail_appends_event(tmp_path: Path) -> None:
     db = tmp_path / "live.db"
     store = SQLiteTraceStore(db)
 
-    app = TraceTUIApp(store=store, ws_uri=None, poll_interval=3600)
+    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600)
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.goto_screen("live")
@@ -261,7 +261,7 @@ async def test_tui_open_detail(tmp_path: Path) -> None:
     store = SQLiteTraceStore(db)
     _seed_session(store, "session_X", event_count=3)
 
-    app = TraceTUIApp(store=store, ws_uri=None, poll_interval=3600)
+    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600)
     async with app.run_test() as pilot:
         await pilot.pause()
         app.open_detail("session_X")
@@ -277,7 +277,7 @@ async def test_tui_chat_screen_standalone(tmp_path: Path) -> None:
 
     db = tmp_path / "chat.db"
     store = SQLiteTraceStore(db)
-    app = TraceTUIApp(store=store, ws_uri=None, poll_interval=3600, agent=None)
+    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600, chat_service=None)
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.goto_screen("chat")
@@ -292,6 +292,7 @@ async def test_tui_chat_screen_standalone(tmp_path: Path) -> None:
 @pytest.mark.asyncio()
 async def test_tui_chat_screen_with_agent(tmp_path: Path) -> None:
     """With an agent, ChatScreen should accept input and stream responses."""
+    from jarvis.adapters.chat import AgentChatAdapter
     from jarvis.interfaces.trace_tui.app import TraceTUIApp
     from jarvis.interfaces.trace_tui.screens import ChatScreen
 
@@ -309,7 +310,8 @@ async def test_tui_chat_screen_with_agent(tmp_path: Path) -> None:
     db = tmp_path / "chat2.db"
     store = SQLiteTraceStore(db)
     fake = _FakeAgent()
-    app = TraceTUIApp(store=store, ws_uri=None, poll_interval=3600, agent=fake)
+    chat_service = AgentChatAdapter(fake)
+    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600, chat_service=chat_service)
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.goto_screen("chat")
@@ -338,6 +340,7 @@ async def test_tui_chat_screen_with_agent(tmp_path: Path) -> None:
 @pytest.mark.asyncio()
 async def test_tui_chat_screen_handles_agent_error(tmp_path: Path) -> None:
     """ChatScreen should display an error if the agent raises."""
+    from jarvis.adapters.chat import AgentChatAdapter
     from jarvis.interfaces.trace_tui.app import TraceTUIApp
     from jarvis.interfaces.trace_tui.screens import ChatScreen
 
@@ -347,7 +350,8 @@ async def test_tui_chat_screen_handles_agent_error(tmp_path: Path) -> None:
 
     db = tmp_path / "chat3.db"
     store = SQLiteTraceStore(db)
-    app = TraceTUIApp(store=store, ws_uri=None, poll_interval=3600, agent=_BoomAgent())
+    chat_service = AgentChatAdapter(_BoomAgent())
+    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600, chat_service=chat_service)
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.goto_screen("chat")

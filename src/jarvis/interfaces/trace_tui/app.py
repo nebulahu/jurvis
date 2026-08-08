@@ -10,12 +10,9 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from jarvis.adapters.storage.trace_store import SQLiteTraceStore
 from jarvis.logging_config import get_logger
+from jarvis.ports.dashboard import ChatServicePort, TraceQueryPort
 from jarvis.ports.trace import TraceEvent, TraceSession
-
-if TYPE_CHECKING:
-    from jarvis.application.assistant import JarvisAgent
 
 from textual.app import App
 from textual.binding import Binding
@@ -70,15 +67,15 @@ class TraceTUIApp(App[Any]):
 
     def __init__(
         self,
-        store: SQLiteTraceStore,
+        trace_store: TraceQueryPort,
+        chat_service: ChatServicePort | None = None,
         ws_uri: str | None = None,
         poll_interval: float = 1.5,
         initial_limit: int = 50,
-        agent: "JarvisAgent | None" = None,
     ) -> None:
         super().__init__()
-        self.store = store
-        self.agent: "JarvisAgent | None" = agent
+        self.trace_store = trace_store
+        self.chat_service = chat_service
         self.state = AppState()
         self._poll_interval = poll_interval
         self._initial_limit = initial_limit
@@ -159,7 +156,7 @@ class TraceTUIApp(App[Any]):
     def open_detail(self, session_id: str) -> None:
         """Push a detail screen for the given session."""
         if session_id not in self.state.session_cache:
-            session = self.store.get_session(session_id)
+            session = self.trace_store.get_session(session_id)
             if session is not None:
                 self.state.session_cache[session_id] = session
         self.push_screen(SessionDetailScreen(session_id))
@@ -171,7 +168,7 @@ class TraceTUIApp(App[Any]):
     def refresh_from_db(self) -> None:
         """Reload recent sessions from SQLite."""
         try:
-            sessions = self.store.get_recent_sessions(limit=self._initial_limit)
+            sessions = self.trace_store.get_recent_sessions(limit=self._initial_limit)
         except Exception as exc:
             logger.warning("trace_tui_db_refresh_failed", error=str(exc))
             return
@@ -205,7 +202,7 @@ class TraceTUIApp(App[Any]):
                 if sid:
                     cached = self.state.session_cache.get(sid)
                     if cached is None:
-                        s = self.store.get_session(sid)
+                        s = self.trace_store.get_session(sid)
                         if s is not None:
                             self.state.session_cache[sid] = s
                     else:

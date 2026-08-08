@@ -10,7 +10,7 @@ from jarvis.adapters.audio.voice import StreamingSpeechPlayer, build_voice_runti
 from jarvis.adapters.audio.wake import WakeCancelled, build_wake_runtime
 from jarvis.application.assistant import JarvisAgent
 from jarvis.application.voice_session import VoiceSession
-from jarvis.bootstrap import build_agent
+from jarvis.bootstrap import build_agent, build_dashboard
 from jarvis.config import Settings
 from jarvis.interfaces.health import create_health_server
 from jarvis.logging_config import get_logger, setup_logging
@@ -352,7 +352,6 @@ def _dashboard_mode(agent: JarvisAgent, settings: Settings) -> None:
     """
     try:
         from jarvis.observability.ws_trace_server import WSTraceServer
-        from jarvis.interfaces.trace_tui.app import TraceTUIApp
     except ImportError as exc:
         print(
             f"[dashboard] 缺少依赖：{exc}\n"
@@ -372,11 +371,8 @@ def _dashboard_mode(agent: JarvisAgent, settings: Settings) -> None:
         ws_server.start()
         print(f"[dashboard] WebSocket 服务已启动：{ws_server.uri}", file=sys.stderr)
 
-    from jarvis.adapters.storage.trace_store import SQLiteTraceStore
-    store = SQLiteTraceStore(settings.storage_settings.db_path)
     ws_uri = ws_server.uri if ws_server is not None else None
-
-    app = TraceTUIApp(store=store, ws_uri=ws_uri, agent=agent)
+    app = build_dashboard(settings, agent, ws_uri)
     try:
         app.run()
     except KeyboardInterrupt:
