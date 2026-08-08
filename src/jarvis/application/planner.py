@@ -4,9 +4,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import Enum
+from time import perf_counter
 from typing import Any
 
 from jarvis.logging_config import get_logger
+from jarvis.ports.trace import TraceCollector
 
 logger = get_logger(__name__)
 
@@ -105,9 +107,15 @@ class PlanResult:
 class Planner:
     """Create and manage execution plans."""
 
-    def __init__(self, model_provider: Any | None = None, max_steps: int = 10) -> None:
+    def __init__(
+        self,
+        model_provider: Any | None = None,
+        max_steps: int = 10,
+        trace: TraceCollector | None = None,
+    ) -> None:
         self._model = model_provider
         self._max_steps = max_steps
+        self._trace = trace
 
     def create_plan(self, task: str, context: dict[str, Any] | None = None) -> Plan:
         """Create an execution plan for a complex task.
@@ -116,10 +124,22 @@ class Planner:
         Otherwise, uses rule-based decomposition.
         """
         if self._model is not None:
-            return self._create_plan_with_model(task, context)
+            plan = self._create_plan_with_model(task, context)
+        else:
+            # Fallback: rule-based plan creation
+            plan = self._create_plan_rules(task)
 
-        # Fallback: rule-based plan creation
-        return self._create_plan_rules(task)
+        # Emit trace: plan created
+        session_id = self._trace.current_session_id if self._trace else None
+        if self._trace is not None:
+            self._trace.emit_plan_created(
+                session_id,
+                plan.goal,
+                len(plan.steps),
+                [s.description for s in plan.steps],
+            )
+
+        return plan
 
     def _create_plan_with_model(self, task: str, context: dict[str, Any] | None = None) -> Plan:
         """Create a plan using the model."""
@@ -240,10 +260,12 @@ class PlanExecutor:
         planner: Planner,
         react_handler: Any,  # JarvisAgent or similar
         max_replans: int = 2,
+        trace: TraceCollector | None = None,
     ) -> None:
         self._planner = planner
         self._react_handler = react_handler
         self._max_replans = max_replans
+        self._trace = trace
 
     def execute(self, plan: Plan) -> PlanResult:
         """Execute a plan and return results."""
@@ -255,6 +277,15 @@ class PlanExecutor:
             if step is None:
                 break
 
+            session_id = self._trace.current_session_id if self._trace else None
+            step_index = current_plan.current_index
+
+            # Emit trace: step start
+            if self._trace is not None:
+                self._trace.emit_plan_step_start(
+                    session_id, step.id, step.description, step_index,
+                )
+
             logger.info(
                 "执行步骤",
                 step_id=step.id,
@@ -262,9 +293,19 @@ class PlanExecutor:
                 progress=f"{current_plan.progress:.0%}",
             )
 
+            step_started = perf_counter()
+
             # Execute step using ReAct loop
             try:
                 result = self._execute_step(step)
+                duration_ms = (perf_counter() - step_started) * 1000
+
+                # Emit trace: step complete (success)
+                if self._trace is not None:
+                    self._trace.emit_plan_step_complete(
+                        session_id, step.id, True, result, "", duration_ms,
+                    )
+
                 current_plan = current_plan.with_step_update(
                     step.id,
                     StepStatus.COMPLETED,
@@ -272,6 +313,14 @@ class PlanExecutor:
                 )
             except Exception as exc:
                 error_msg = str(exc)
+                duration_ms = (perf_counter() - step_started) * 1000
+
+                # Emit trace: step complete (failure)
+                if self._trace is not None:
+                    self._trace.emit_plan_step_complete(
+                        session_id, step.id, False, "", error_msg, duration_ms,
+                    )
+
                 logger.error("步骤执行失败", step_id=step.id, error=error_msg)
 
                 # Try replanning
@@ -281,6 +330,13 @@ class PlanExecutor:
                         step,
                         error_msg,
                     )
+
+                    # Emit trace: replanned
+                    if self._trace is not None:
+                        self._trace.emit_plan_replanned(
+                            session_id, error_msg, len(current_plan.steps),
+                        )
+
                     replan_count += 1
                 else:
                     current_plan = current_plan.with_step_update(

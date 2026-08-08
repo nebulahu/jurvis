@@ -235,6 +235,101 @@ class TraceCollector(Protocol):
         """Emit a custom event."""
         ...
 
+    # LATS events
+
+    def emit_lats_iteration(
+        self,
+        session_id: str | None,
+        iteration: int,
+        total_iterations: int,
+        reward: float = 0.0,
+        depth: int = 0,
+    ) -> None:
+        """Emit a LATS iteration event."""
+        ...
+
+    def emit_lats_node_expanded(
+        self,
+        session_id: str | None,
+        node_state: str,
+        action: str = "",
+        children_count: int = 0,
+    ) -> None:
+        """Emit a LATS node expansion event."""
+        ...
+
+    def emit_lats_simulation(
+        self,
+        session_id: str | None,
+        reward: float,
+        depth: int,
+    ) -> None:
+        """Emit a LATS simulation event."""
+        ...
+
+    def emit_lats_backprop(
+        self,
+        session_id: str | None,
+        node_state: str,
+        reward: float,
+        path_length: int,
+    ) -> None:
+        """Emit a LATS backpropagation event."""
+        ...
+
+    def emit_lats_complete(
+        self,
+        session_id: str | None,
+        best_path: list[str],
+        best_reward: float,
+        nodes_explored: int,
+    ) -> None:
+        """Emit LATS completion event."""
+        ...
+
+    # Planner events
+
+    def emit_plan_created(
+        self,
+        session_id: str | None,
+        goal: str,
+        step_count: int,
+        steps: list[str] | None = None,
+    ) -> None:
+        """Emit a plan creation event."""
+        ...
+
+    def emit_plan_step_start(
+        self,
+        session_id: str | None,
+        step_id: str,
+        description: str,
+        index: int,
+    ) -> None:
+        """Emit a plan step start event."""
+        ...
+
+    def emit_plan_step_complete(
+        self,
+        session_id: str | None,
+        step_id: str,
+        success: bool,
+        result: str = "",
+        error: str = "",
+        duration_ms: float = 0,
+    ) -> None:
+        """Emit a plan step completion event."""
+        ...
+
+    def emit_plan_replanned(
+        self,
+        session_id: str | None,
+        reason: str,
+        new_step_count: int,
+    ) -> None:
+        """Emit a replanning event."""
+        ...
+
 
 class TraceRenderer(Protocol):
     """Port for rendering trace events (e.g., CLI output)."""

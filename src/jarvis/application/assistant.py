@@ -113,6 +113,7 @@ class JarvisAgent:
         self._lats_engine = LATSEngine(
             lats_solver=lats_solver,
             conversation=conversation,
+            trace=trace_collector,
         )
 
         # Optional advanced components

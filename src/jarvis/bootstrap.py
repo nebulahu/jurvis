@@ -49,7 +49,7 @@ def _build_trace_collector(
     return AgentTraceCollector(store=store, renderer=renderer, enabled=True)
 
 
-def _build_router(provider: "ModelProvider | None" = None) -> "Any":
+def _build_router(provider: "ModelProvider | None" = None, trace: "Any | None" = None) -> "Any":
     """Create an intent router if the module is available."""
     try:
         from jarvis.application.intent import Intent, IntentClassifier
@@ -65,7 +65,7 @@ def _build_router(provider: "ModelProvider | None" = None) -> "Any":
         return None
 
 
-def _build_planner(provider: "ModelProvider | None" = None) -> "Any":
+def _build_planner(provider: "ModelProvider | None" = None, trace: "Any | None" = None) -> "Any":
     """Create a planner if the module is available."""
     try:
         from jarvis.application.planner import Planner
@@ -75,7 +75,7 @@ def _build_planner(provider: "ModelProvider | None" = None) -> "Any":
         return None
 
 
-def _build_reflector(provider: "ModelProvider | None" = None) -> "Any":
+def _build_reflector(provider: "ModelProvider | None" = None, trace: "Any | None" = None) -> "Any":
     """Create a reflector if the module is available."""
     try:
         from jarvis.application.reflection import Reflector
@@ -85,7 +85,7 @@ def _build_reflector(provider: "ModelProvider | None" = None) -> "Any":
         return None
 
 
-def _build_lats_solver(provider: "ModelProvider | None" = None) -> "Any":
+def _build_lats_solver(provider: "ModelProvider | None" = None, trace: "Any | None" = None) -> "Any":
     """Create a LATS solver if the module is available."""
     try:
         from jarvis.application.tree_search import LATS, LATSSolver
@@ -95,13 +95,14 @@ def _build_lats_solver(provider: "ModelProvider | None" = None) -> "Any":
             exploration_constant=1.414,
             max_depth=5,
             max_children=3,
+            trace=trace,
         )
         # Create a simple executor for LATS
         class SimpleExecutor:
             def execute(self, action: str) -> str:
                 return f"执行: {action}"
 
-        return LATSSolver(lats=lats, executor=SimpleExecutor())
+        return LATSSolver(lats=lats, executor=SimpleExecutor(), trace=trace)
     except ImportError:
         logger.debug("LATS 模块不可用，跳过")
         return None
@@ -212,18 +213,18 @@ def build_agent(
             allow_image_input=settings.desktop_settings.vision_enabled,
         )
 
-    # Build router, planner, reflector, and LATS for intelligent routing
-    router = _build_router(provider)
-    planner = _build_planner(provider)
-    reflector = _build_reflector(provider)
-    lats_solver = _build_lats_solver(provider)
-
-    # Build trace collector for observability
+    # Build trace collector for observability first (needed by other components)
     trace_collector = _build_trace_collector(
         db_path=storage.db_path,
         enable_cli=True,
         enable_storage=True,
     )
+
+    # Build router, planner, reflector, and LATS for intelligent routing
+    router = _build_router(provider, trace=trace_collector)
+    planner = _build_planner(provider, trace=trace_collector)
+    reflector = _build_reflector(provider, trace=trace_collector)
+    lats_solver = _build_lats_solver(provider, trace=trace_collector)
 
     return JarvisAgent(
         provider=provider,

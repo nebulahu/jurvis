@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from time import perf_counter
 
 from jarvis.ports.memory_policy import SaveDecision, check_memory_save
 from jarvis.ports.storage import (
@@ -10,6 +11,7 @@ from jarvis.ports.storage import (
     NoteWriterPort,
     SessionSummary,
 )
+from jarvis.ports.trace import TraceCollector, TraceEvent, TraceEventType
 
 
 class MemoryService:
@@ -24,9 +26,31 @@ class MemoryService:
         self,
         db: MemoryStorePort,
         note_writer: NoteWriterPort,
+        trace: TraceCollector | None = None,
     ) -> None:
         self._db = db
         self._writer = note_writer
+        self._trace = trace
+
+    def _emit_memory_event(
+        self,
+        event_type: TraceEventType,
+        data: dict[str, object],
+        duration_ms: float | None = None,
+    ) -> None:
+        """Emit a memory-related trace event."""
+        if self._trace is None:
+            return
+        session_id = self._trace.current_session_id
+        if session_id is None:
+            return
+        self._trace.emit(TraceEvent(
+            event_type=event_type,
+            timestamp=datetime.now(),
+            session_id=session_id,
+            data=data,
+            duration_ms=duration_ms,
+        ))
 
     # --- ModelRequestPort (delegate) ---
 
@@ -70,6 +94,8 @@ class MemoryService:
         confidence: float = 1.0,
         importance: int = 3,
     ) -> MemoryRecord:
+        started = perf_counter()
+
         policy = check_memory_save(
             title=title,
             content=content,
@@ -77,6 +103,15 @@ class MemoryService:
             confidence=confidence,
         )
         if policy.decision == SaveDecision.REJECT:
+            # Emit trace: memory rejected
+            self._emit_memory_event(
+                TraceEventType.CUSTOM,
+                {
+                    "name": "memory_rejected",
+                    "title": title[:100],
+                    "reason": policy.reason,
+                },
+            )
             raise ValueError(policy.reason)
 
         now = datetime.now().astimezone()
@@ -103,11 +138,51 @@ class MemoryService:
             )
         except Exception:
             path.unlink(missing_ok=True)
+
+            # Emit trace: memory save error
+            self._emit_memory_event(
+                TraceEventType.ERROR,
+                {
+                    "error": "memory_save_failed",
+                    "title": title[:100],
+                },
+            )
             raise
+
+        duration_ms = (perf_counter() - started) * 1000
+
+        # Emit trace: memory saved
+        self._emit_memory_event(
+            TraceEventType.CUSTOM,
+            {
+                "name": "memory_saved",
+                "memory_id": record.id,
+                "title": title[:100],
+                "category": category,
+                "memory_type": memory_type,
+            },
+            duration_ms,
+        )
+
         return record
 
     def search(self, query: str, limit: int = 5) -> list[MemoryRecord]:
-        return self._db.search(query, limit)
+        started = perf_counter()
+        results = self._db.search(query, limit)
+        duration_ms = (perf_counter() - started) * 1000
+
+        # Emit trace: memory searched
+        self._emit_memory_event(
+            TraceEventType.CUSTOM,
+            {
+                "name": "memory_searched",
+                "query": query[:100],
+                "result_count": len(results),
+            },
+            duration_ms,
+        )
+
+        return results
 
     def get_memory(self, memory_id: int) -> MemoryRecord | None:
         return self._db.get_memory(memory_id)

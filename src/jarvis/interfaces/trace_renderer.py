@@ -179,6 +179,56 @@ class CLITraceRenderer:
             retry_str = f" {Colors.YELLOW}[将重试]{Colors.RESET}" if should_retry else ""
             return f"{feedback[:50]}{retry_str}"
 
+        if event.event_type == TraceEventType.LATS_ITERATION:
+            iteration = data.get("iteration", 0)
+            total = data.get("total_iterations", 0)
+            reward = data.get("reward", 0)
+            depth = data.get("depth", 0)
+            return f"迭代 {iteration}/{total} 奖励: {reward:.2f} 深度: {depth}"
+
+        if event.event_type == TraceEventType.LATS_NODE_EXPANDED:
+            action = data.get("action", "")
+            children = data.get("children_count", 0)
+            return f"{action[:30]} (+{children} 子节点)"
+
+        if event.event_type == TraceEventType.LATS_SIMULATION:
+            reward = data.get("reward", 0)
+            depth = data.get("depth", 0)
+            return f"奖励: {reward:.2f} 深度: {depth}"
+
+        if event.event_type == TraceEventType.LATS_BACKPROP:
+            reward = data.get("reward", 0)
+            path_length = data.get("path_length", 0)
+            return f"奖励: {reward:.2f} 路径长: {path_length}"
+
+        if event.event_type == TraceEventType.LATS_COMPLETE:
+            reward = data.get("best_reward", 0)
+            nodes = data.get("nodes_explored", 0)
+            path = data.get("best_path", [])
+            return f"奖励: {reward:.2f} 节点: {nodes} 路径: {len(path)} 步"
+
+        if event.event_type == TraceEventType.PLAN_CREATED:
+            step_count = data.get("step_count", 0)
+            goal = data.get("goal", "")
+            return f"{step_count} 步 - {goal[:40]}"
+
+        if event.event_type == TraceEventType.PLAN_STEP_START:
+            index = data.get("index", 0)
+            desc = data.get("description", "")
+            return f"[{index + 1}] {desc[:50]}"
+
+        if event.event_type == TraceEventType.PLAN_STEP_COMPLETE:
+            success = data.get("success", False)
+            error = data.get("error", "")
+            if success:
+                return f"{Colors.GREEN}成功{Colors.RESET}"
+            return f"{Colors.RED}失败: {error[:40]}{Colors.RESET}"
+
+        if event.event_type == TraceEventType.PLAN_REPLANNED:
+            reason = data.get("reason", "")
+            new_count = data.get("new_step_count", 0)
+            return f"{reason[:40]} (新: {new_count} 步)"
+
         if event.event_type == TraceEventType.ERROR:
             error = data.get("error", "")
             return f"{Colors.RED}{error[:80]}{Colors.RESET}"

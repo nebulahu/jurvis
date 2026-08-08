@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from jarvis.logging_config import get_logger
+from jarvis.ports.trace import TraceCollector
 
 logger = get_logger(__name__)
 
@@ -109,11 +110,13 @@ class LATS:
         exploration_constant: float = 1.414,
         max_depth: int = 5,
         max_children: int = 3,
+        trace: TraceCollector | None = None,
     ) -> None:
         self._model = model_provider
         self._exploration_constant = exploration_constant
         self._max_depth = max_depth
         self._max_children = max_children
+        self._trace = trace
 
     def search(
         self,
@@ -131,6 +134,8 @@ class LATS:
         Returns:
             SearchResult with the best path found
         """
+        session_id = self._trace.current_session_id if self._trace else None
+
         # Create root node
         root = TreeNode(state=task)
 
@@ -145,14 +150,37 @@ class LATS:
             node = self._select(root)
 
             # 2. Expansion: Add children if not terminal
+            expanded = False
             if node.depth < self._max_depth and node.visits > 0:
+                old_children_count = len(node.children)
                 node = self._expand(node, task)
+                if len(node.children) > old_children_count or node.parent:
+                    expanded = True
+                    if self._trace is not None and old_children_count == 0:
+                        self._trace.emit_lats_node_expanded(
+                            session_id,
+                            node.state,
+                            node.action or "",
+                            len(node.children),
+                        )
 
             # 3. Simulation: Evaluate node
             reward = self._simulate(node, task)
+            if self._trace is not None:
+                self._trace.emit_lats_simulation(session_id, reward, node.depth)
 
             # 4. Backpropagation: Update ancestors
-            self._backpropagate(node, reward)
+            path_length = self._backpropagate(node, reward)
+            if self._trace is not None:
+                self._trace.emit_lats_backprop(
+                    session_id, node.state, reward, path_length,
+                )
+
+            # Emit iteration summary
+            if self._trace is not None:
+                self._trace.emit_lats_iteration(
+                    session_id, i + 1, budget, reward, node.depth,
+                )
 
             logger.debug(
                 "MCTS 模拟",
@@ -232,13 +260,20 @@ class LATS:
         # This would call the model to evaluate the state
         return self._simulate_heuristic(node, task)
 
-    def _backpropagate(self, node: TreeNode, reward: float) -> None:
-        """Backpropagate reward up the tree."""
+    def _backpropagate(self, node: TreeNode, reward: float) -> int:
+        """Backpropagate reward up the tree.
+
+        Returns:
+            Length of path traversed
+        """
         current: TreeNode | None = node
+        path_length = 0
         while current is not None:
             current.visits += 1
             current.value += reward
             current = current.parent
+            path_length += 1
+        return path_length
 
     def _generate_actions(self, node: TreeNode, task: str) -> list[str]:
         """Generate possible actions from current state."""
@@ -294,9 +329,11 @@ class LATSSolver:
         self,
         lats: LATS,
         executor: Any,  # PlanExecutor or similar
+        trace: TraceCollector | None = None,
     ) -> None:
         self._lats = lats
         self._executor = executor
+        self._trace = trace
 
     def solve(
         self,
@@ -334,6 +371,15 @@ class LATSSolver:
             final_answer = "\n".join(results) if results else "无法执行任何操作。"
         else:
             final_answer = "未找到可行的解决方案。"
+
+        # Emit trace: LATS complete
+        if self._trace is not None:
+            self._trace.emit_lats_complete(
+                self._trace.current_session_id,
+                search_result.best_path,
+                search_result.best_reward,
+                search_result.nodes_explored,
+            )
 
         return final_answer, search_result
 

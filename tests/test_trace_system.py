@@ -264,11 +264,194 @@ def test_trace_with_router_and_intent(tmp_path: Path) -> None:
     print("\n[OK] Intent/routing trace test passed!")
 
 
+def test_trace_lats_coverage(tmp_path: Path) -> None:
+    """Test LATS iteration/expansion/simulation/backprop events."""
+    print("\n" + "=" * 60)
+    print("Test: LATS Trace Coverage")
+    print("=" * 60)
+
+    db_path = tmp_path / "trace_lats.db"
+    cli_file = tmp_path / "lats_cli.txt"
+
+    store = SQLiteTraceStore(db_path)
+    cli_output = open(cli_file, "w", encoding="utf-8")
+    renderer = CLITraceRenderer(output=cli_output, verbose=False)
+    collector = AgentTraceCollector(store=store, renderer=renderer)
+
+    # Build LATS with trace
+    from jarvis.application.tree_search import LATS, LATSSolver
+
+    lats = LATS(
+        model_provider=None,
+        exploration_constant=1.414,
+        max_depth=3,
+        max_children=2,
+        trace=collector,
+    )
+
+    class StubExecutor:
+        def execute(self, action: str) -> str:
+            return f"Executed: {action}"
+
+    solver = LATSSolver(lats=lats, executor=StubExecutor(), trace=collector)
+
+    # Start a session
+    session_id = collector.start_session("lats_demo", {"task": "test"})
+    try:
+        result = solver.solve(task="Find best path", budget=3)
+        final_answer, search_result = result
+        print(f"Final answer: {final_answer}")
+        print(f"Best reward: {search_result.best_reward:.2f}")
+        print(f"Nodes explored: {search_result.nodes_explored}")
+    finally:
+        collector.end_session(session_id)
+        cli_output.close()
+
+    # Verify events
+    cli_text = cli_file.read_text(encoding="utf-8")
+    assert "lats_iteration" in cli_text, "Should have lats_iteration events"
+    assert "lats_simulation" in cli_text, "Should have lats_simulation events"
+    assert "lats_backprop" in cli_text, "Should have lats_backprop events"
+    assert "lats_complete" in cli_text, "Should have lats_complete event"
+
+    # Verify SQLite
+    import sqlite3
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        lats_events = conn.execute("""
+            SELECT event_type, COUNT(*) as count
+            FROM trace_events
+            WHERE event_type LIKE 'lats_%'
+            GROUP BY event_type
+        """).fetchall()
+        counts = {row["event_type"]: row["count"] for row in lats_events}
+        print(f"LATS event counts: {counts}")
+        assert counts.get("lats_iteration", 0) >= 3, "Should have 3 iterations"
+        assert counts.get("lats_simulation", 0) >= 3, "Should have 3 simulations"
+        assert counts.get("lats_backprop", 0) >= 3, "Should have 3 backprops"
+        assert counts.get("lats_complete", 0) == 1, "Should have 1 completion"
+
+    print("[OK] LATS trace coverage test passed!")
+
+
+def test_trace_planner_coverage(tmp_path: Path) -> None:
+    """Test plan/step/replan trace events."""
+    print("\n" + "=" * 60)
+    print("Test: Planner Trace Coverage")
+    print("=" * 60)
+
+    db_path = tmp_path / "trace_plan.db"
+    cli_file = tmp_path / "plan_cli.txt"
+
+    store = SQLiteTraceStore(db_path)
+    cli_output = open(cli_file, "w", encoding="utf-8")
+    renderer = CLITraceRenderer(output=cli_output, verbose=False)
+    collector = AgentTraceCollector(store=store, renderer=renderer)
+
+    from jarvis.application.planner import Planner
+
+    planner = Planner(model_provider=None, max_steps=5, trace=collector)
+
+    # Start session
+    session_id = collector.start_session("plan_demo")
+    try:
+        plan = planner.create_plan("第一步: 打开文件\n第二步: 读取内容\n第三步: 导出结果")
+        print(f"Plan created: {plan.goal}")
+        print(f"Steps: {len(plan.steps)}")
+        for i, step in enumerate(plan.steps):
+            print(f"  [{i+1}] {step.description[:40]}")
+    finally:
+        collector.end_session(session_id)
+        cli_output.close()
+
+    cli_text = cli_file.read_text(encoding="utf-8")
+    assert "plan_created" in cli_text, "Should have plan_created event"
+
+    # Verify SQLite
+    import sqlite3
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        plan_events = conn.execute("""
+            SELECT data FROM trace_events WHERE event_type = 'plan_created'
+        """).fetchall()
+        assert len(plan_events) == 1
+        import json
+        data = json.loads(plan_events[0]["data"])
+        assert data["step_count"] == 3
+        print(f"Plan event data: {data}")
+
+    print("[OK] Planner trace coverage test passed!")
+
+
+def test_trace_memory_coverage(tmp_path: Path) -> None:
+    """Test memory save/search trace events."""
+    print("\n" + "=" * 60)
+    print("Test: Memory Trace Coverage")
+    print("=" * 60)
+
+    db_path = tmp_path / "trace_memory.db"
+    cli_file = tmp_path / "memory_cli.txt"
+
+    memory_db = SQLiteStore(db_path)
+    store = SQLiteTraceStore(db_path)
+    cli_output = open(cli_file, "w", encoding="utf-8")
+    renderer = CLITraceRenderer(output=cli_output, verbose=False)
+    collector = AgentTraceCollector(store=store, renderer=renderer)
+
+    from jarvis.adapters.storage.obsidian import ObsidianNoteWriter
+    from jarvis.application.memory_service import MemoryService
+
+    writer = ObsidianNoteWriter(tmp_path / "notes")
+    service = MemoryService(db=memory_db, note_writer=writer, trace=collector)
+
+    session_id = collector.start_session("memory_demo")
+    try:
+        # Save memory
+        record = service.remember(
+            title="喜欢的咖啡",
+            content="拿铁，少糖",
+            category="偏好",
+        )
+        print(f"Memory saved: id={record.id}, title={record.title}")
+
+        # Search memory
+        results = service.search("咖啡", limit=3)
+        print(f"Search results: {len(results)}")
+    finally:
+        collector.end_session(session_id)
+        cli_output.close()
+
+    # Verify SQLite
+    import sqlite3
+    import json
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        memory_events = conn.execute("""
+            SELECT event_type, data FROM trace_events
+            WHERE data LIKE '%memory_%'
+            ORDER BY timestamp
+        """).fetchall()
+        print(f"Memory events: {len(memory_events)}")
+        assert len(memory_events) >= 2, "Should have save + search events"
+
+        names = []
+        for row in memory_events:
+            data = json.loads(row["data"])
+            names.append(data.get("name", ""))
+        assert "memory_saved" in names
+        assert "memory_searched" in names
+
+    print("[OK] Memory trace coverage test passed!")
+
+
 if __name__ == "__main__":
     import tempfile
 
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         tmp_path = Path(tmp)
         test_trace_cli_and_sqlite(tmp_path)
         test_trace_with_router_and_intent(tmp_path)
+        test_trace_lats_coverage(tmp_path)
+        test_trace_planner_coverage(tmp_path)
+        test_trace_memory_coverage(tmp_path)
         print("\n[SUCCESS] All tests passed!")

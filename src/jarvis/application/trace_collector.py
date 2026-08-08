@@ -340,3 +340,180 @@ class AgentTraceCollector:
             session_id=session_id or self._current_session_id or "",
             data={"name": name, **(data or {})},
         ))
+
+    # LATS events
+
+    def emit_lats_iteration(
+        self,
+        session_id: str | None,
+        iteration: int,
+        total_iterations: int,
+        reward: float = 0.0,
+        depth: int = 0,
+    ) -> None:
+        """Emit a LATS iteration event."""
+        self.emit(TraceEvent(
+            event_type=TraceEventType.LATS_ITERATION,
+            timestamp=datetime.now(),
+            session_id=session_id or self._current_session_id or "",
+            data={
+                "iteration": iteration,
+                "total_iterations": total_iterations,
+                "reward": reward,
+                "depth": depth,
+            },
+        ))
+
+    def emit_lats_node_expanded(
+        self,
+        session_id: str | None,
+        node_state: str,
+        action: str = "",
+        children_count: int = 0,
+    ) -> None:
+        """Emit a LATS node expansion event."""
+        self.emit(TraceEvent(
+            event_type=TraceEventType.LATS_NODE_EXPANDED,
+            timestamp=datetime.now(),
+            session_id=session_id or self._current_session_id or "",
+            data={
+                "node_state": node_state[:100],
+                "action": action,
+                "children_count": children_count,
+            },
+        ))
+
+    def emit_lats_simulation(
+        self,
+        session_id: str | None,
+        reward: float,
+        depth: int,
+    ) -> None:
+        """Emit a LATS simulation event."""
+        self.emit(TraceEvent(
+            event_type=TraceEventType.LATS_SIMULATION,
+            timestamp=datetime.now(),
+            session_id=session_id or self._current_session_id or "",
+            data={
+                "reward": reward,
+                "depth": depth,
+            },
+        ))
+
+    def emit_lats_backprop(
+        self,
+        session_id: str | None,
+        node_state: str,
+        reward: float,
+        path_length: int,
+    ) -> None:
+        """Emit a LATS backpropagation event."""
+        self.emit(TraceEvent(
+            event_type=TraceEventType.LATS_BACKPROP,
+            timestamp=datetime.now(),
+            session_id=session_id or self._current_session_id or "",
+            data={
+                "node_state": node_state[:100],
+                "reward": reward,
+                "path_length": path_length,
+            },
+        ))
+
+    def emit_lats_complete(
+        self,
+        session_id: str | None,
+        best_path: list[str],
+        best_reward: float,
+        nodes_explored: int,
+    ) -> None:
+        """Emit LATS completion event."""
+        self.emit(TraceEvent(
+            event_type=TraceEventType.LATS_COMPLETE,
+            timestamp=datetime.now(),
+            session_id=session_id or self._current_session_id or "",
+            data={
+                "best_path": best_path,
+                "best_reward": best_reward,
+                "nodes_explored": nodes_explored,
+            },
+        ))
+
+    # Planner events
+
+    def emit_plan_created(
+        self,
+        session_id: str | None,
+        goal: str,
+        step_count: int,
+        steps: list[str] | None = None,
+    ) -> None:
+        """Emit a plan creation event."""
+        self.emit(TraceEvent(
+            event_type=TraceEventType.PLAN_CREATED,
+            timestamp=datetime.now(),
+            session_id=session_id or self._current_session_id or "",
+            data={
+                "goal": goal[:200],
+                "step_count": step_count,
+                "steps": steps or [],
+            },
+        ))
+
+    def emit_plan_step_start(
+        self,
+        session_id: str | None,
+        step_id: str,
+        description: str,
+        index: int,
+    ) -> None:
+        """Emit a plan step start event."""
+        self.emit(TraceEvent(
+            event_type=TraceEventType.PLAN_STEP_START,
+            timestamp=datetime.now(),
+            session_id=session_id or self._current_session_id or "",
+            data={
+                "step_id": step_id,
+                "description": description[:200],
+                "index": index,
+            },
+        ))
+
+    def emit_plan_step_complete(
+        self,
+        session_id: str | None,
+        step_id: str,
+        success: bool,
+        result: str = "",
+        error: str = "",
+        duration_ms: float = 0,
+    ) -> None:
+        """Emit a plan step completion event."""
+        self.emit(TraceEvent(
+            event_type=TraceEventType.PLAN_STEP_COMPLETE,
+            timestamp=datetime.now(),
+            session_id=session_id or self._current_session_id or "",
+            data={
+                "step_id": step_id,
+                "success": success,
+                "result": result[:200],
+                "error": error[:200],
+            },
+            duration_ms=duration_ms,
+        ))
+
+    def emit_plan_replanned(
+        self,
+        session_id: str | None,
+        reason: str,
+        new_step_count: int,
+    ) -> None:
+        """Emit a replanning event."""
+        self.emit(TraceEvent(
+            event_type=TraceEventType.PLAN_REPLANNED,
+            timestamp=datetime.now(),
+            session_id=session_id or self._current_session_id or "",
+            data={
+                "reason": reason[:200],
+                "new_step_count": new_step_count,
+            },
+        ))
