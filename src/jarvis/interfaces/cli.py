@@ -377,7 +377,7 @@ def _tui_mode(agent: JarvisAgent, settings: Settings) -> None:
     store = SQLiteTraceStore(settings.storage_settings.db_path)
     ws_uri = ws_server.uri if ws_server is not None else None
 
-    app = TraceTUIApp(store=store, ws_uri=ws_uri)
+    app = TraceTUIApp(store=store, ws_uri=ws_uri, agent=agent)
     try:
         app.run()
     except KeyboardInterrupt:

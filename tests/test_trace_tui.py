@@ -269,6 +269,97 @@ async def test_tui_open_detail(tmp_path: Path) -> None:
         assert isinstance(app.screen, SessionDetailScreen)
 
 
+@pytest.mark.asyncio()
+async def test_tui_chat_screen_standalone(tmp_path: Path) -> None:
+    """Without an agent, ChatScreen should render in read-only mode (no crash)."""
+    from jarvis.interfaces.trace_tui.app import TraceTUIApp
+    from jarvis.interfaces.trace_tui.screens import ChatScreen
+
+    db = tmp_path / "chat.db"
+    store = SQLiteTraceStore(db)
+    app = TraceTUIApp(store=store, ws_uri=None, poll_interval=3600, agent=None)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.goto_screen("chat")
+        await pilot.pause()
+        assert isinstance(app.screen, ChatScreen)
+        # Input should be disabled in standalone mode
+        from textual.widgets import Input as _Input
+        chat_input = app.screen.query_one("#chat-input", _Input)
+        assert chat_input.disabled is True
+
+
+@pytest.mark.asyncio()
+async def test_tui_chat_screen_with_agent(tmp_path: Path) -> None:
+    """With an agent, ChatScreen should accept input and stream responses."""
+    from jarvis.interfaces.trace_tui.app import TraceTUIApp
+    from jarvis.interfaces.trace_tui.screens import ChatScreen
+
+    class _FakeAgent:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def chat(self, text: str, on_text_delta: Any = None, **kwargs: Any) -> str:
+            self.calls.append(text)
+            if on_text_delta:
+                on_text_delta("echo: ")
+                on_text_delta("hi")
+            return "echo: hi"
+
+    db = tmp_path / "chat2.db"
+    store = SQLiteTraceStore(db)
+    fake = _FakeAgent()
+    app = TraceTUIApp(store=store, ws_uri=None, poll_interval=3600, agent=fake)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.goto_screen("chat")
+        await pilot.pause()
+        assert isinstance(app.screen, ChatScreen)
+        # Input should be enabled
+        from textual.widgets import Input as _Input
+        chat_input = app.screen.query_one("#chat-input", _Input)
+        assert chat_input.disabled is False
+        # Submit a message via the screen's handler
+        app.screen._handle_submit("hello world")
+        await pilot.pause()
+        # Agent received the call
+        assert fake.calls == ["hello world"]
+        # Log should contain the user message and the agent response
+        from textual.widgets import RichLog
+        log = app.screen.query_one("#chat-log", RichLog)
+        text = log.lines  # RichLog.lines property
+        flat = "\n".join(str(line) for line in text)
+        assert "hello world" in flat
+        # Streaming deltas are written as separate log entries; verify both pieces.
+        assert "echo: " in flat
+        assert "hi" in flat
+
+
+@pytest.mark.asyncio()
+async def test_tui_chat_screen_handles_agent_error(tmp_path: Path) -> None:
+    """ChatScreen should display an error if the agent raises."""
+    from jarvis.interfaces.trace_tui.app import TraceTUIApp
+    from jarvis.interfaces.trace_tui.screens import ChatScreen
+
+    class _BoomAgent:
+        def chat(self, text: str, **kwargs: Any) -> str:
+            raise RuntimeError("kaboom")
+
+    db = tmp_path / "chat3.db"
+    store = SQLiteTraceStore(db)
+    app = TraceTUIApp(store=store, ws_uri=None, poll_interval=3600, agent=_BoomAgent())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.goto_screen("chat")
+        await pilot.pause()
+        app.screen._handle_submit("trigger error")
+        await pilot.pause()
+        # Should not raise; input re-enabled
+        from textual.widgets import Input as _Input
+        chat_input = app.screen.query_one("#chat-input", _Input)
+        assert chat_input.disabled is False
+
+
 # ---------------------------------------------------------------------------
 # CLI handler tests
 # ---------------------------------------------------------------------------

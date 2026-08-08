@@ -11,7 +11,7 @@ from jarvis.ports.trace import TraceEvent, TraceEventType, TraceSession
 
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import DataTable, Input, Static
+from textual.widgets import DataTable, Input, RichLog, Static
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
@@ -39,6 +39,7 @@ class SessionListScreen(Screen[Any]):
         ("L", "open_live", "Live"),
         ("M", "open_metrics", "Metrics"),
         ("F", "open_filter", "Filter"),
+        ("C", "open_chat", "Chat"),
     ]
 
     def compose(self) -> "ComposeResult":
@@ -102,6 +103,9 @@ class SessionListScreen(Screen[Any]):
 
     async def action_open_filter(self) -> None:
         await self.app.goto_screen("filter")  # type: ignore[attr-defined]
+
+    async def action_open_chat(self) -> None:
+        await self.app.goto_screen("chat")  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +367,79 @@ class MetricsScreen(Screen[Any]):
     def _panel(title: str, lines: list[str]) -> str:
         body = "\n".join(lines) if lines else "(no data)"
         return f"[b]{title}[/b]\n\n{body}"
+
+
+# ---------------------------------------------------------------------------
+# Chat screen
+# ---------------------------------------------------------------------------
+
+
+class ChatScreen(Screen[Any]):
+    """Inline chat with the agent. Streams tokens into the log.
+
+    Only fully functional when the App was constructed with an `agent`.
+    In standalone `jarvis-trace` mode (no agent), shows a hint instead.
+    """
+
+    BINDINGS = [
+        ("escape", "app.pop_screen", "Back"),
+        ("ctrl+l", "clear_log", "Clear"),
+    ]
+
+    def compose(self) -> "ComposeResult":
+        yield Static("Chat — type and press Enter", id="status")
+        yield RichLog(id="chat-log", highlight=False, markup=False, wrap=True)
+        yield Input(placeholder="说点什么…", id="chat-input")
+
+    def on_mount(self) -> None:
+        log: RichLog = self.query_one("#chat-log", RichLog)
+        app: "TraceTUIApp" = self.app  # type: ignore[assignment]
+        if app.agent is None:
+            log.write("[yellow]Standalone mode: no agent wired up.[/yellow]")
+            log.write("[dim]Run via `jarvis` REPL → /trace for live chat.[/dim]")
+            self.query_one("#chat-input", Input).disabled = True
+        else:
+            log.write("[bold green]Jarvis[/bold green] 已就绪，输入消息后按 Enter。")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        text = event.value.strip()
+        if not text:
+            return
+        event.input.value = ""  # clear
+        self._handle_submit(text)
+
+    def _handle_submit(self, text: str) -> None:
+        log: RichLog = self.query_one("#chat-log", RichLog)
+        app: "TraceTUIApp" = self.app  # type: ignore[assignment]
+        log.write(f"[bold cyan]你[/bold cyan] › {text}")
+
+        agent = app.agent
+        if agent is None:
+            log.write("[red](no agent available in standalone mode)[/red]")
+            return
+
+        # Disable input while generating to prevent concurrent calls.
+        inp = self.query_one("#chat-input", Input)
+        inp.disabled = True
+        log.write("[bold green]Jarvis[/bold green] › ")
+
+        def on_delta(delta: str) -> None:
+            log.write(delta, expand=False)
+
+        try:
+            response = agent.chat(text, on_text_delta=on_delta)
+            if response:
+                # Force a newline so the next user message starts cleanly.
+                log.write("")
+        except Exception as exc:
+            log.write(f"[red](error: {exc})[/red]")
+        finally:
+            inp.disabled = False
+            inp.focus()
+
+    def action_clear_log(self) -> None:
+        log: RichLog = self.query_one("#chat-log", RichLog)
+        log.clear()
 
 
 # ---------------------------------------------------------------------------

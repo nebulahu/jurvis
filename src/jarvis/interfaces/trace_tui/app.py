@@ -19,6 +19,7 @@ from textual.binding import Binding
 from textual.screen import Screen
 
 from jarvis.interfaces.trace_tui.screens import (
+    ChatScreen,
     FilterScreen,
     LiveTailScreen,
     MetricsScreen,
@@ -61,6 +62,7 @@ class TraceTUIApp(App[Any]):
         "live": LiveTailScreen,
         "filter": FilterScreen,
         "metrics": MetricsScreen,
+        "chat": ChatScreen,
     }
 
     def __init__(
@@ -69,9 +71,11 @@ class TraceTUIApp(App[Any]):
         ws_uri: str | None = None,
         poll_interval: float = 1.5,
         initial_limit: int = 50,
+        agent: Any | None = None,
     ) -> None:
         super().__init__()
         self.store = store
+        self.agent = agent
         self.state = AppState()
         self._poll_interval = poll_interval
         self._initial_limit = initial_limit
@@ -136,7 +140,7 @@ class TraceTUIApp(App[Any]):
         self.notify(keys, title="Key bindings", timeout=8)
 
     async def _cycle(self, delta: int) -> None:
-        order = ["list", "live", "filter", "metrics"]
+        order = ["list", "live", "filter", "metrics", "chat"]
         current = self.screen.name or "list" if self.screen.name in order else "list"
         idx = order.index(current) if current in order else 0
         target = order[(idx + delta) % len(order)]
