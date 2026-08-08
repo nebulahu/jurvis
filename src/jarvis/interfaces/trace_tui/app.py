@@ -1,18 +1,21 @@
 """Trace Dashboard TUI Application.
 
-A textual-based terminal dashboard for the Jarvis trace observability
-system. Supports session list/detail, live event tail (via WebSocket),
+A textual-based terminal dashboard for the Jarvis assistant.
+Supports chat, session list/detail, live event tail (via WebSocket),
 filter/search, and aggregate metrics.
 """
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jarvis.adapters.storage.trace_store import SQLiteTraceStore
 from jarvis.logging_config import get_logger
 from jarvis.ports.trace import TraceEvent, TraceSession
+
+if TYPE_CHECKING:
+    from jarvis.application.assistant import JarvisAgent
 
 from textual.app import App
 from textual.binding import Binding
@@ -42,10 +45,10 @@ class AppState:
 
 
 class TraceTUIApp(App[Any]):
-    """Textual app for browsing trace data."""
+    """Textual app for Jarvis dashboard (chat + trace)."""
 
     CSS_PATH = "styles.tcss"
-    TITLE = "Jarvis Trace Dashboard"
+    TITLE = "Jarvis Dashboard"
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
@@ -71,11 +74,11 @@ class TraceTUIApp(App[Any]):
         ws_uri: str | None = None,
         poll_interval: float = 1.5,
         initial_limit: int = 50,
-        agent: Any | None = None,
+        agent: "JarvisAgent | None" = None,
     ) -> None:
         super().__init__()
         self.store = store
-        self.agent = agent
+        self.agent: "JarvisAgent | None" = agent
         self.state = AppState()
         self._poll_interval = poll_interval
         self._initial_limit = initial_limit

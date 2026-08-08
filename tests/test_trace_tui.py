@@ -368,7 +368,7 @@ async def test_tui_chat_screen_handles_agent_error(tmp_path: Path) -> None:
 def test_tui_mode_handles_missing_deps(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """When textual/websockets aren't installed, /trace prints a hint instead of crashing."""
+    """When textual/websockets aren't installed, /dashboard prints a hint instead of crashing."""
     import builtins
     real_import = builtins.__import__
 
@@ -383,9 +383,9 @@ def test_tui_mode_handles_missing_deps(
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
     class _StubAgent:
-        _trace: Any = None
+        trace_collector: Any = None
 
-    from jarvis.interfaces.cli import _tui_mode
+    from jarvis.interfaces.cli import _dashboard_mode
 
     # Patch Settings.load so we don't need a real project root / .env file.
     fake_settings = SimpleNamespace(
@@ -398,15 +398,15 @@ def test_tui_mode_handles_missing_deps(
     import jarvis.config as config_module
     monkeypatch.setattr(config_module.Settings, "load", staticmethod(_fake_load))
 
-    _tui_mode(_StubAgent(), fake_settings)  # type: ignore[arg-type]
+    _dashboard_mode(_StubAgent(), fake_settings)  # type: ignore[arg-type]
     out = capsys.readouterr().err
-    assert "缺少依赖" in out or "tui" in out.lower()
+    assert "缺少依赖" in out or "dashboard" in out.lower()
 
 
 def test_tui_mode_readonly_when_collector_disabled(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Without a trace collector, /trace should still launch the TUI in read-only mode."""
+    """Without a trace collector, /dashboard should still launch the TUI in read-only mode."""
     import jarvis.interfaces.trace_tui.app as app_module
 
     class _StubApp:
@@ -419,10 +419,10 @@ def test_tui_mode_readonly_when_collector_disabled(
     orig = app_module.TraceTUIApp
     app_module.TraceTUIApp = _StubApp  # type: ignore[assignment]
     try:
-        from jarvis.interfaces.cli import _tui_mode
+        from jarvis.interfaces.cli import _dashboard_mode
 
         class _StubAgent:
-            _trace: Any = None
+            trace_collector: Any = None
 
         # Patch WSTraceServer so we don't bind to a real port either.
         import jarvis.observability.ws_trace_server as ws_module
@@ -448,7 +448,7 @@ def test_tui_mode_readonly_when_collector_disabled(
                 storage_settings=SimpleNamespace(db_path=Path("/tmp/stub.db")),
             )
 
-        _tui_mode(_StubAgent(), settings)  # should not raise
+        _dashboard_mode(_StubAgent(), settings)  # should not raise
         err = capsys.readouterr().err
         # Either path produces a status line
         assert ("跟踪收集器未启用" in err) or ("WebSocket" in err)

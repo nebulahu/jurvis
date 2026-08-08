@@ -33,7 +33,7 @@ tui = [
 
 [project.scripts]
 jarvis = "jarvis.interfaces.cli:main"
-jarvis-trace = "jarvis.interfaces.trace_tui:main"
+jarvis-dashboard = "jarvis.interfaces.trace_tui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

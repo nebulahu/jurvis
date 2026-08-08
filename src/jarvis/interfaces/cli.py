@@ -342,8 +342,8 @@ def _wake_mode(agent: JarvisAgent, settings: Settings) -> None:
             print(f"[唤醒请求失败] {type(exc).__name__}: {exc}", file=sys.stderr)
 
 
-def _tui_mode(agent: JarvisAgent, settings: Settings) -> None:
-    """Launch the Trace Dashboard TUI with a live WebSocket feed.
+def _dashboard_mode(agent: JarvisAgent, settings: Settings) -> None:
+    """Launch the Jarvis Dashboard TUI (chat + trace).
 
     The TUI is launched in-process on the main thread (textual owns the terminal).
     A WSTraceServer runs in a daemon thread and forwards every emit() call
@@ -355,23 +355,22 @@ def _tui_mode(agent: JarvisAgent, settings: Settings) -> None:
         from jarvis.interfaces.trace_tui.app import TraceTUIApp
     except ImportError as exc:
         print(
-            f"[trace] 缺少依赖：{exc}\n"
+            f"[dashboard] 缺少依赖：{exc}\n"
             "  请运行：pip install -e \".[tui]\"",
             file=sys.stderr,
         )
         return
 
-    trace_collector = getattr(agent, "_trace", None)
     ws_server: WSTraceServer | None = None
-    if trace_collector is None:
+    if agent.trace_collector is None:
         print(
-            "[trace] 跟踪收集器未启用，TUI 将以只读模式启动（仅数据库轮询）。",
+            "[dashboard] 跟踪收集器未启用，TUI 将以只读模式启动（仅数据库轮询）。",
             file=sys.stderr,
         )
     else:
-        ws_server = WSTraceServer(trace_collector)
+        ws_server = WSTraceServer(agent.trace_collector)  # type: ignore[arg-type]
         ws_server.start()
-        print(f"[trace] WebSocket 服务已启动：{ws_server.uri}", file=sys.stderr)
+        print(f"[dashboard] WebSocket 服务已启动：{ws_server.uri}", file=sys.stderr)
 
     from jarvis.adapters.storage.trace_store import SQLiteTraceStore
     store = SQLiteTraceStore(settings.storage_settings.db_path)
@@ -385,7 +384,7 @@ def _tui_mode(agent: JarvisAgent, settings: Settings) -> None:
     finally:
         if ws_server is not None:
             ws_server.stop()
-        print("[trace] TUI 已退出，回到 REPL。", file=sys.stderr)
+        print("[dashboard] TUI 已退出，回到 REPL。", file=sys.stderr)
 
 
 def main() -> None:
@@ -428,7 +427,7 @@ def main() -> None:
             print(
                 "/help 显示帮助；/status 检查服务；/clear 清空当前上下文；"
                 "/mem 关键词 搜索记忆；/voice 按键语音；/wake 唤醒词模式；"
-                "/trace 打开跟踪仪表盘；/quit 退出。"
+                "/dashboard 打开控制台（对话+跟踪）；/quit 退出。"
             )
             continue
         if text == "/status":
@@ -454,8 +453,8 @@ def main() -> None:
         if text == "/wake":
             _wake_mode(agent, settings)
             continue
-        if text == "/trace":
-            _tui_mode(agent, settings)
+        if text == "/dashboard":
+            _dashboard_mode(agent, settings)
             continue
         try:
             _chat_with_stream(

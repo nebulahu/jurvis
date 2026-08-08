@@ -1,8 +1,8 @@
-"""Trace Dashboard TUI sub-package.
+"""Jarvis Dashboard TUI sub-package.
 
 Exposes:
 - TraceTUIApp: textual App
-- main(): console-script entry point for `jarvis-trace`
+- main(): console-script entry point for `jarvis-dashboard`
 """
 from __future__ import annotations
 
@@ -17,14 +17,14 @@ from jarvis.interfaces.trace_tui.app import TraceTUIApp
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Console-script entry point for `jarvis-trace`.
+    """Console-script entry point for `jarvis-dashboard`.
 
     Cold-machine safe: opens the trace store directly, no API key required.
     Falls back to DB polling when no WebSocket URI is provided.
     """
     parser = argparse.ArgumentParser(
-        prog="jarvis-trace",
-        description="Terminal dashboard for Jarvis trace data.",
+        prog="jarvis-dashboard",
+        description="Terminal dashboard for Jarvis (chat + trace).",
     )
     parser.add_argument(
         "--db",
@@ -64,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
         db_path = settings.storage_settings.db_path
     if not db_path.exists():
         print(
-            f"[jarvis-trace] trace store not found: {db_path}\n"
+            f"[jarvis-dashboard] trace store not found: {db_path}\n"
             "Hint: run `jarvis` once to generate data, or pass --db explicitly.",
             file=sys.stderr,
         )

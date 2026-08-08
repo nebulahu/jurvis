@@ -125,6 +125,11 @@ class JarvisAgent:
         self._audit = audit
 
     @property
+    def trace_collector(self) -> TraceCollector | None:
+        """Get trace collector for TUI dashboard integration."""
+        return self._trace
+
+    @property
     def model_requests(self) -> ModelRequestPort | None:
         """Get model request port for status reporting."""
         return self._model_requests
