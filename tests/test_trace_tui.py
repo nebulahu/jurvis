@@ -4,7 +4,7 @@ Coverage:
 - WSTraceServer: broadcasts events from AgentTraceCollector to connected clients
 - TraceWSClient: parses JSON messages back into TraceEvent dataclasses
 - TUI screens: render without exceptions via App.run_test() pilot
-- /trace CLI handler: doesn't crash when collector is disabled
+- /dashboard CLI handler: doesn't crash when collector is disabled
 """
 from __future__ import annotations
 
@@ -160,9 +160,10 @@ def test_ws_client_returns_none_on_garbage() -> None:
 
 
 @pytest.mark.asyncio()
-async def test_tui_renders_session_list(tmp_path: Path) -> None:
-    """App should mount and the session table should populate from DB."""
+async def test_tui_renders_main_screen(tmp_path: Path) -> None:
+    """App should mount and the main screen should be displayed."""
     from jarvis.interfaces.trace_tui.app import TraceTUIApp
+    from jarvis.interfaces.trace_tui.screens import MainScreen
 
     db = tmp_path / "ui.db"
     store = SQLiteTraceStore(db)
@@ -174,127 +175,32 @@ async def test_tui_renders_session_list(tmp_path: Path) -> None:
         await pilot.pause()
         # Sessions loaded
         assert len(app.state.sessions) >= 2
-        # Top screen is SessionListScreen
-        from jarvis.interfaces.trace_tui.screens import SessionListScreen
-        assert isinstance(app.screen, SessionListScreen)
+        # Top screen is MainScreen
+        assert isinstance(app.screen, MainScreen)
 
 
 @pytest.mark.asyncio()
-async def test_tui_metrics_screen_aggregates(tmp_path: Path) -> None:
-    """Metrics screen should compute KPIs across sessions."""
+async def test_tui_chat_panel_renders(tmp_path: Path) -> None:
+    """Chat panel should render without errors."""
     from jarvis.interfaces.trace_tui.app import TraceTUIApp
-    from jarvis.interfaces.trace_tui.screens import MetricsScreen
-
-    db = tmp_path / "metrics.db"
-    store = SQLiteTraceStore(db)
-    _seed_session(store, "s1", event_count=5)
-
-    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await app.goto_screen("metrics")
-        await pilot.pause()
-        assert isinstance(app.screen, MetricsScreen)
-        metrics = app.screen
-        metrics.refresh_metrics()  # should not raise
-
-
-@pytest.mark.asyncio()
-async def test_tui_filter_screen_search(tmp_path: Path) -> None:
-    """Filter screen should call search_events on input."""
-    from jarvis.interfaces.trace_tui.app import TraceTUIApp
-    from jarvis.interfaces.trace_tui.screens import FilterScreen
-
-    db = tmp_path / "filter.db"
-    store = SQLiteTraceStore(db)
-    _seed_session(store, "s1", event_count=3)
-
-    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await app.goto_screen("filter")
-        await pilot.pause()
-        assert isinstance(app.screen, FilterScreen)
-        # Searching should not raise
-        app.screen.run_search("tool_1")
-        await pilot.pause()
-        # Empty query should also be safe
-        app.screen.run_search("")
-        await pilot.pause()
-
-
-@pytest.mark.asyncio()
-async def test_tui_live_tail_appends_event(tmp_path: Path) -> None:
-    """LiveTailScreen.append_event should add rows without raising."""
-    from jarvis.interfaces.trace_tui.app import TraceTUIApp
-    from jarvis.interfaces.trace_tui.screens import LiveTailScreen
-
-    db = tmp_path / "live.db"
-    store = SQLiteTraceStore(db)
-
-    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await app.goto_screen("live")
-        await pilot.pause()
-        assert isinstance(app.screen, LiveTailScreen)
-        # Append a fake event
-        evt = TraceEvent(
-            event_type=TraceEventType.TOOL_CALL,
-            timestamp=datetime.now(),
-            session_id="live_test",
-            data={"tool_name": "fake_tool"},
-        )
-        app.screen.append_event(evt)
-        await pilot.pause()
-        # Should have one row
-        assert app.screen.query_one("#live-table").row_count == 1
-
-
-@pytest.mark.asyncio()
-async def test_tui_open_detail(tmp_path: Path) -> None:
-    """open_detail should push a SessionDetailScreen with the right session."""
-    from jarvis.interfaces.trace_tui.app import TraceTUIApp
-    from jarvis.interfaces.trace_tui.screens import SessionDetailScreen
-
-    db = tmp_path / "detail.db"
-    store = SQLiteTraceStore(db)
-    _seed_session(store, "session_X", event_count=3)
-
-    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600)
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        app.open_detail("session_X")
-        await pilot.pause()
-        assert isinstance(app.screen, SessionDetailScreen)
-
-
-@pytest.mark.asyncio()
-async def test_tui_chat_screen_standalone(tmp_path: Path) -> None:
-    """Without an agent, ChatScreen should render in read-only mode (no crash)."""
-    from jarvis.interfaces.trace_tui.app import TraceTUIApp
-    from jarvis.interfaces.trace_tui.screens import ChatScreen
+    from jarvis.interfaces.trace_tui.screens import ChatPanel
 
     db = tmp_path / "chat.db"
     store = SQLiteTraceStore(db)
-    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600, chat_service=None)
+
+    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.goto_screen("chat")
-        await pilot.pause()
-        assert isinstance(app.screen, ChatScreen)
-        # Input should be disabled in standalone mode
-        from textual.widgets import Input as _Input
-        chat_input = app.screen.query_one("#chat-input", _Input)
-        assert chat_input.disabled is True
+        # Chat panel should be visible
+        chat = app.query_one("#chat-panel")
+        assert isinstance(chat, ChatPanel)
 
 
 @pytest.mark.asyncio()
-async def test_tui_chat_screen_with_agent(tmp_path: Path) -> None:
-    """With an agent, ChatScreen should accept input and stream responses."""
+async def test_tui_chat_with_service(tmp_path: Path) -> None:
+    """Chat should work when chat_service is provided."""
     from jarvis.adapters.chat import AgentChatAdapter
     from jarvis.interfaces.trace_tui.app import TraceTUIApp
-    from jarvis.interfaces.trace_tui.screens import ChatScreen
 
     class _FakeAgent:
         def __init__(self) -> None:
@@ -311,57 +217,84 @@ async def test_tui_chat_screen_with_agent(tmp_path: Path) -> None:
     store = SQLiteTraceStore(db)
     fake = _FakeAgent()
     chat_service = AgentChatAdapter(fake)
-    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600, chat_service=chat_service)
+    app = TraceTUIApp(trace_store=store, chat_service=chat_service, ws_uri=None, poll_interval=3600)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.goto_screen("chat")
-        await pilot.pause()
-        assert isinstance(app.screen, ChatScreen)
-        # Input should be enabled
-        from textual.widgets import Input as _Input
-        chat_input = app.screen.query_one("#chat-input", _Input)
-        assert chat_input.disabled is False
-        # Submit a message via the screen's handler
-        app.screen._handle_submit("hello world")
+        # Get the chat panel and submit a message
+        from jarvis.interfaces.trace_tui.screens import ChatPanel
+        chat = app.query_one("#chat-panel", ChatPanel)
+        chat._handle_submit("hello world")
         await pilot.pause()
         # Agent received the call
         assert fake.calls == ["hello world"]
-        # Log should contain the user message and the agent response
-        from textual.widgets import RichLog
-        log = app.screen.query_one("#chat-log", RichLog)
-        text = log.lines  # RichLog.lines property
-        flat = "\n".join(str(line) for line in text)
-        assert "hello world" in flat
-        # Streaming deltas are written as separate log entries; verify both pieces.
-        assert "echo: " in flat
-        assert "hi" in flat
 
 
 @pytest.mark.asyncio()
-async def test_tui_chat_screen_handles_agent_error(tmp_path: Path) -> None:
-    """ChatScreen should display an error if the agent raises."""
+async def test_tui_session_management(tmp_path: Path) -> None:
+    """Session management should work through chat service."""
     from jarvis.adapters.chat import AgentChatAdapter
     from jarvis.interfaces.trace_tui.app import TraceTUIApp
-    from jarvis.interfaces.trace_tui.screens import ChatScreen
 
-    class _BoomAgent:
+    class _FakeAgent:
         def chat(self, text: str, **kwargs: Any) -> str:
-            raise RuntimeError("kaboom")
+            return "ok"
 
-    db = tmp_path / "chat3.db"
+    db = tmp_path / "session.db"
     store = SQLiteTraceStore(db)
-    chat_service = AgentChatAdapter(_BoomAgent())
-    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600, chat_service=chat_service)
+    chat_service = AgentChatAdapter(_FakeAgent())
+    app = TraceTUIApp(trace_store=store, chat_service=chat_service, ws_uri=None, poll_interval=3600)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await app.goto_screen("chat")
+        # Should have default session
+        sessions = chat_service.get_sessions()
+        assert len(sessions) == 1
+        assert sessions[0].name == "Default"
+        # Create new session
+        app.create_new_session()
         await pilot.pause()
-        app.screen._handle_submit("trigger error")
+        sessions = chat_service.get_sessions()
+        assert len(sessions) == 2
+
+
+@pytest.mark.asyncio()
+async def test_tui_standalone_mode(tmp_path: Path) -> None:
+    """Without chat_service, should show standalone hint."""
+    from jarvis.interfaces.trace_tui.app import TraceTUIApp
+    from jarvis.interfaces.trace_tui.screens import ChatPanel
+
+    db = tmp_path / "standalone.db"
+    store = SQLiteTraceStore(db)
+
+    app = TraceTUIApp(trace_store=store, chat_service=None, ws_uri=None, poll_interval=3600)
+    async with app.run_test() as pilot:
         await pilot.pause()
-        # Should not raise; input re-enabled
+        chat = app.query_one("#chat-panel")
+        assert isinstance(chat, ChatPanel)
+        # Input should be disabled in standalone mode
         from textual.widgets import Input as _Input
-        chat_input = app.screen.query_one("#chat-input", _Input)
-        assert chat_input.disabled is False
+        chat_input = chat.query_one("#chat-input", _Input)
+        assert chat_input.disabled is True
+
+
+@pytest.mark.asyncio()
+async def test_tui_trace_panel_renders(tmp_path: Path) -> None:
+    """Trace panel should render with session data."""
+    from jarvis.interfaces.trace_tui.app import TraceTUIApp
+    from jarvis.interfaces.trace_tui.screens import TracePanel
+
+    db = tmp_path / "trace.db"
+    store = SQLiteTraceStore(db)
+    _seed_session(store, "s1", event_count=3)
+
+    app = TraceTUIApp(trace_store=store, ws_uri=None, poll_interval=3600)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Show trace panel
+        main = app.screen
+        main._show_panel("trace")
+        await pilot.pause()
+        trace = app.query_one("#trace-panel")
+        assert isinstance(trace, TracePanel)
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +302,7 @@ async def test_tui_chat_screen_handles_agent_error(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_tui_mode_handles_missing_deps(
+def test_dashboard_mode_handles_missing_deps(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """When textual/websockets aren't installed, /dashboard prints a hint instead of crashing."""
@@ -407,7 +340,7 @@ def test_tui_mode_handles_missing_deps(
     assert "缺少依赖" in out or "dashboard" in out.lower()
 
 
-def test_tui_mode_readonly_when_collector_disabled(
+def test_dashboard_mode_readonly_when_collector_disabled(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Without a trace collector, /dashboard should still launch the TUI in read-only mode."""

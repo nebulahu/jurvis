@@ -7,9 +7,30 @@ implement these ports; the TUI never imports adapters directly.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol
 
 from jarvis.ports.trace import TraceEvent, TraceSession
+
+
+@dataclass(frozen=True, slots=True)
+class SessionInfo:
+    """Lightweight session metadata for sidebar display."""
+
+    session_id: str
+    name: str
+    created_at: datetime = field(default_factory=datetime.now)
+    last_active: datetime = field(default_factory=datetime.now)
+    message_count: int = 0
+    is_active: bool = True
+
+    @property
+    def display_name(self) -> str:
+        """Short display name for sidebar (truncated if needed)."""
+        if len(self.name) > 25:
+            return self.name[:22] + "..."
+        return self.name
 
 
 class TraceQueryPort(Protocol):
@@ -42,11 +63,47 @@ class TraceQueryPort(Protocol):
 
 
 class ChatServicePort(Protocol):
-    """Chat service interface for sending messages and receiving responses.
+    """Chat service interface for session management and message exchange.
 
     Implemented by adapters (e.g., AgentChatAdapter wrapping JarvisAgent)
-    and consumed by the TUI's ChatScreen.
+    and consumed by the TUI's ChatScreen and Sidebar.
     """
+
+    # Session management
+
+    def create_session(self, name: str | None = None, metadata: dict[str, Any] | None = None) -> str:
+        """Create a new chat session.
+
+        Args:
+            name: Optional human-readable name (auto-generated if omitted).
+            metadata: Optional session metadata.
+
+        Returns:
+            The new session ID.
+        """
+        ...
+
+    def delete_session(self, session_id: str) -> None:
+        """Delete a chat session and its history."""
+        ...
+
+    def rename_session(self, session_id: str, name: str) -> None:
+        """Rename a chat session."""
+        ...
+
+    def get_sessions(self) -> list[SessionInfo]:
+        """Get all sessions with metadata."""
+        ...
+
+    def get_current_session(self) -> str | None:
+        """Get the currently active session ID."""
+        ...
+
+    def switch_session(self, session_id: str) -> None:
+        """Switch to a different session."""
+        ...
+
+    # Message exchange
 
     def send_message(
         self,
@@ -61,5 +118,13 @@ class ChatServicePort(Protocol):
 
         Returns:
             The complete response text.
+        """
+        ...
+
+    def get_history(self, session_id: str | None = None, limit: int = 100) -> list[dict[str, str]]:
+        """Get conversation history for a session.
+
+        Returns:
+            List of {"role": "user"|"assistant", "content": "..."} dicts.
         """
         ...

@@ -1,4 +1,4 @@
-"""Trace Dashboard TUI Application.
+"""Jarvis Dashboard TUI Application.
 
 A textual-based terminal dashboard for the Jarvis assistant.
 Supports chat, session list/detail, live event tail (via WebSocket),
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from jarvis.logging_config import get_logger
 from jarvis.ports.dashboard import ChatServicePort, TraceQueryPort
@@ -19,12 +19,8 @@ from textual.binding import Binding
 from textual.screen import Screen
 
 from jarvis.interfaces.trace_tui.screens import (
-    ChatScreen,
-    FilterScreen,
-    LiveTailScreen,
-    MetricsScreen,
-    SessionDetailScreen,
-    SessionListScreen,
+    MainScreen,
+    Sidebar,
 )
 from jarvis.interfaces.trace_tui.ws_client import TraceWSClient
 
@@ -51,23 +47,11 @@ class TraceTUIApp(App[Any]):
         Binding("q", "quit", "Quit"),
         Binding("ctrl+c", "quit", "Quit", show=False),
         Binding("?", "help", "Help"),
-        Binding("escape", "back", "Back"),
-        Binding("tab", "next_screen", "Next"),
-        Binding("shift+tab", "prev_screen", "Prev"),
-        Binding("r", "refresh", "Refresh"),
     ]
-
-    _SCREEN_REGISTRY: dict[str, type[Screen[Any]]] = {
-        "list": SessionListScreen,
-        "live": LiveTailScreen,
-        "filter": FilterScreen,
-        "metrics": MetricsScreen,
-        "chat": ChatScreen,
-    }
 
     def __init__(
         self,
-        trace_store: TraceQueryPort,
+        trace_store: TraceQueryPort | None = None,
         chat_service: ChatServicePort | None = None,
         ws_uri: str | None = None,
         poll_interval: float = 1.5,
@@ -90,8 +74,7 @@ class TraceTUIApp(App[Any]):
     async def on_mount(self) -> None:
         """Initial data load + start background tasks."""
         self.refresh_from_db()
-        # Use push_screen (non-waiting); on_mount is a coroutine, not a worker.
-        await self.push_screen(SessionListScreen())
+        await self.push_screen(MainScreen())
 
         if self._ws_client is not None:
             self._ws_task = asyncio.create_task(self._consume_ws())
@@ -115,51 +98,68 @@ class TraceTUIApp(App[Any]):
     # Actions
     # ------------------------------------------------------------------
 
-    async def action_back(self) -> None:
-        if len(self.screen_stack) > 1:
-            await self.pop_screen()
-        else:
-            self.exit()
-
-    async def action_next_screen(self) -> None:
-        await self._cycle(1)
-
-    async def action_prev_screen(self) -> None:
-        await self._cycle(-1)
-
-    def action_refresh(self) -> None:
-        self.refresh_from_db()
-
     def action_help(self) -> None:
-        from textual.binding import Binding as _Binding
-        keys = " | ".join(
-            f"{b.key}: {b.action}"
-            for b in self.BINDINGS
-            if isinstance(b, _Binding) and b.show
-        )[:200]
-        self.notify(keys, title="Key bindings", timeout=8)
+        self.notify(
+            "Ctrl+N: New session · Ctrl+D: Delete · "
+            "Ctrl+T: Trace · Ctrl+M: Metrics · Ctrl+F: Filter · q: Quit",
+            title="Key bindings",
+            timeout=8,
+        )
 
-    async def _cycle(self, delta: int) -> None:
-        order = ["list", "live", "filter", "metrics", "chat"]
-        current = self.screen.name or "list" if self.screen.name in order else "list"
-        idx = order.index(current) if current in order else 0
-        target = order[(idx + delta) % len(order)]
-        await self.goto_screen(target)
+    # ------------------------------------------------------------------
+    # Session management
+    # ------------------------------------------------------------------
 
-    async def goto_screen(self, name: str) -> None:
-        """Switch to a top-level screen by registered name."""
-        screen_cls = self._SCREEN_REGISTRY.get(name)
-        if screen_cls is None:
+    def create_new_session(self) -> None:
+        """Create a new chat session and switch to it."""
+        if self.chat_service is None:
+            self.notify("No chat service available", severity="warning")
             return
-        await self.switch_screen(screen_cls())
 
-    def open_detail(self, session_id: str) -> None:
-        """Push a detail screen for the given session."""
-        if session_id not in self.state.session_cache:
-            session = self.trace_store.get_session(session_id)
-            if session is not None:
-                self.state.session_cache[session_id] = session
-        self.push_screen(SessionDetailScreen(session_id))
+        session_id = self.chat_service.create_session()
+        self.notify(f"Created session: {session_id[-8:]}", severity="information")
+        self._refresh_sidebar()
+
+    def delete_current_session(self) -> None:
+        """Delete the current chat session."""
+        if self.chat_service is None:
+            return
+
+        current = self.chat_service.get_current_session()
+        if current is None:
+            return
+
+        self.chat_service.delete_session(current)
+        self.notify("Session deleted", severity="information")
+        self._refresh_sidebar()
+
+    def switch_session(self, session_id: str) -> None:
+        """Switch to a different session."""
+        if self.chat_service is None:
+            return
+
+        self.chat_service.switch_session(session_id)
+        self._refresh_sidebar()
+        self._refresh_chat()
+
+    def _refresh_sidebar(self) -> None:
+        """Refresh the sidebar session list."""
+        try:
+            sidebar = self.query_one("#sidebar")
+            if isinstance(sidebar, Sidebar):
+                sidebar.refresh_sessions()
+        except Exception:
+            pass
+
+    def _refresh_chat(self) -> None:
+        """Refresh the chat panel with current session history."""
+        from jarvis.interfaces.trace_tui.screens import ChatPanel
+        try:
+            chat_panel = self.query_one("#chat-panel")
+            if isinstance(chat_panel, ChatPanel):
+                chat_panel.clear_messages()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Background tasks
@@ -167,6 +167,8 @@ class TraceTUIApp(App[Any]):
 
     def refresh_from_db(self) -> None:
         """Reload recent sessions from SQLite."""
+        if self.trace_store is None:
+            return
         try:
             sessions = self.trace_store.get_recent_sessions(limit=self._initial_limit)
         except Exception as exc:
@@ -175,14 +177,6 @@ class TraceTUIApp(App[Any]):
         self.state.sessions = sessions
         for s in sessions:
             self.state.session_cache.setdefault(s.session_id, s)
-        try:
-            current = self.screen
-            if isinstance(current, SessionListScreen):
-                current.refresh_table()
-            elif isinstance(current, MetricsScreen):
-                current.refresh_metrics()
-        except Exception:
-            pass
 
     async def _poll_loop(self) -> None:
         """Fallback poller — runs even when WS is connected."""
@@ -202,14 +196,18 @@ class TraceTUIApp(App[Any]):
                 if sid:
                     cached = self.state.session_cache.get(sid)
                     if cached is None:
-                        s = self.trace_store.get_session(sid)
-                        if s is not None:
-                            self.state.session_cache[sid] = s
+                        if self.trace_store is not None:
+                            s = self.trace_store.get_session(sid)
+                            if s is not None:
+                                self.state.session_cache[sid] = s
                     else:
                         cached.events.append(event)
+                # Refresh trace panel if visible
+                from jarvis.interfaces.trace_tui.screens import TracePanel
                 try:
-                    if isinstance(self.screen, LiveTailScreen):
-                        self.screen.append_event(event)
+                    trace_panel = self.query_one("#trace-panel")
+                    if isinstance(trace_panel, TracePanel) and trace_panel.display:
+                        trace_panel.refresh_trace()
                 except Exception:
                     pass
         except asyncio.CancelledError:
